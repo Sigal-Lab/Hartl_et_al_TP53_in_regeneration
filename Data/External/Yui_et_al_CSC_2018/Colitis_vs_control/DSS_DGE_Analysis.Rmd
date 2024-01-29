@@ -1,0 +1,94 @@
+---
+title: "Yui DSS DGE Analysis"
+output: html_document
+---
+
+```{r, message=FALSE}
+library(oligo)
+library(Biobase)
+library(limma)
+#BiocManager::install("mogene20sttranscriptcluster.db")
+library(mogene20sttranscriptcluster.db)
+library(writexl)
+```
+
+```{r}
+reload_data = F
+if(reload_data) {
+  
+  celfiles = list.celfiles("E-MTAB-5249.raw.1", full.names=T)  
+  
+  sample_desc = read.table("E-MTAB-5249.sdrf.txt", sep="\t", header=T)
+  rownames(sample_desc) = sample_desc$Array.Data.File
+
+  symbols = select(mogene20sttranscriptcluster.db, keys=rownames(exprs(eset)), keytype="PROBEID", columns="SYMBOL")
+  entrez = select(mogene20sttranscriptcluster.db, keys=rownames(exprs(eset)), keytype="PROBEID", columns="ENTREZID")
+  names = select(mogene20sttranscriptcluster.db, keys=rownames(exprs(eset)), keytype="PROBEID", columns="GENENAME")
+  
+  symbol_df = data.frame(SYMBOL=tapply(symbols$SYMBOL, symbols$PROBEID, paste, collapse=","))
+  entrez_df = data.frame(ENTREZID=tapply(entrez$ENTREZID, entrez$PROBEID, paste, collapse=","))
+  name_df = data.frame(GENENAME=tapply(names$GENENAME, names$PROBEID, paste, collapse=","))
+  
+  anno = data.frame(ProbeID=rownames(exprs(eset)), stringsAsFactors = F)
+  anno$SYMBOL = symbol_df[anno$ProbeID,"SYMBOL"]
+  anno$ENTREZID = entrez_df[anno$ProbeID, "ENTREZID"]
+  anno$GENENAME = name_df[anno$ProbeID, "GENENAME"]
+  rownames(anno) = anno$ProbeID
+  
+  abatch <- read.celfiles(celfiles, phenoData = AnnotatedDataFrame(sample_desc))
+  eset <- rma(abatch)
+  fData(eset) <- anno
+
+  save(eset, sample_desc, file="Yui_DSS_preprocessed.Rdata")
+} else {
+  load("Yui_DSS_preprocessed.Rdata")
+}
+```
+
+
+
+```{r , fig.width=8, fig.height=8}
+################################################################################
+## MDS on partially normalized data 
+cp = palette(rainbow(12))
+data_inp = t(exprs(eset)) 
+ed = sample_desc
+
+d <- dist(data_inp) # euclidean distances between the rows
+fit <- cmdscale(d,eig=TRUE, k=2) # k is the number of dim
+
+# plot solution
+x <- fit$points[,1]
+y <- fit$points[,2]
+cc = cp[as.numeric(factor(ed[rownames(data_inp),]$Factor.Value.disease.))]
+plot(x, y, xlab="Coordinate 1", ylab="Coordinate 2", main="Metric MDS, all samples", type="p", ylim=c(min(y)-50, max(y)+50), xlim=c(min(x)-50, max(x)+200), pch=20)
+points(x, y, col=cc, pch=20)
+#text(x,y,labels=ed[rownames(data_inp),]$sample_ID, col=cp[as.numeric(factor(ed[rownames(data_inp),]$Tissue.Status))])
+text(x,y,labels=ed[rownames(data_inp),]$Source.Name, col=cc, cex=.8, pos=4)
+################################################################################
+```
+
+
+
+```{r}
+emat = exprs(eset)
+
+ed_tmp = sample_desc[colnames(emat),]
+fac = factor(ed_tmp$Factor.Value.disease., levels=c("normal","colitis") )
+design = model.matrix(~fac)
+fit <- lmFit(eset, design)
+fit <- eBayes(fit)
+res = topTable(fit, coef = "faccolitis", adjust = "BH",number=nrow(fit))
+```
+
+```{r}
+plot(res$logFC, -log10(res$adj.P.Val))
+```
+
+
+```{r}
+
+write.table(res, file="DGE_Colitis_vs_control.txt", sep="\t", row.names = F)
+write_xlsx(res, path="DGE_Colitis_vs_control.xlsx")
+```
+

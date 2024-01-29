@@ -1,0 +1,179 @@
+---
+title: "Microarray Data of P53KO/KOWI - GSEA analysis on DGE results - Plots"
+author: "Hilmar Berger"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: false
+    number_sections: true
+    code_folding: hide
+    
+pdf_document:
+    fig_caption: true
+date: "`r format(Sys.time(), '%d %B, %Y %H:%M:%S')`"
+---
+
+```{r, warning=FALSE, message=FALSE}
+rm(list=ls())
+
+#suppressMessages(library(xlsx))
+library(ggplot2)
+library(knitr)
+library(scales)
+library(fgsea)
+library(data.table)
+library(org.Mm.eg.db)
+library(gridExtra)
+
+source("../fGSEA_plot_functions.R")
+
+result_folder = "../../Results/Organoids_Trp53_KO_KOWI_Resolver"
+if (!file.exists(result_folder)) dir.create(result_folder, recursive=T)
+
+set.seed(12345)
+```
+
+# Overview
+
+This is data from P53KO or KOWI vs. WT (Kimberly Hartly). Data was initially analyzed by Hans Mollenkopf (MPIIB). 
+
+For analysis, a preranked analysis using the R package fGSEA was used that should give similar results to preranked analysis in standard GSEA. 
+
+
+```{r}
+input_files = list.files(path="../../Data/Processed/Resolver_output", pattern = "DGE_RE ", full.names = T)
+names(input_files) = gsub(" vs\\. ", "_vs_", gsub("DGE_RE \\(","", gsub("\\)\\.txt","",basename(input_files))))
+
+all_results = list()
+for (n in names(input_files)) {
+  tmp = read.table(input_files[n], sep="\t", header=T, stringsAsFactors = F)
+  tmp2 <- strsplit(n, "_") |> unlist()
+  n_new <- paste(rev(tmp2),collapse="_")
+  
+  # the files provided by Hans Mollenkopf for some reasons contain the human gene symbols for otherwise mouse data
+  # We replace these by the correct mouse symbols 
+  entrez = unique(as.character(tmp$EntrezGeneID))
+  entrez = entrez[!is.na(entrez)]
+  mouse_symbols = select(org.Mm.eg.db, keys=entrez, keytype = "ENTREZID", columns = "SYMBOL")
+  rownames(mouse_symbols)  = mouse_symbols$ENTREZID
+  tmp$GeneSymbol = mouse_symbols[as.character(tmp$EntrezGeneID), "SYMBOL"]
+  all_results[[n_new]] = tmp
+}
+```
+
+```{r}
+data_generation_date="2024-01-29"
+output_folder = result_folder
+GSEA_datafile = file.path(output_folder,"fGSEA_Results.Rdata")
+load(GSEA_datafile)
+load(file.path(output_folder, "Geneset_collections.Rdata"))
+```
+
+
+The plots below use differential gene expression data and GSEA results from `r data_generation_date` .
+
+
+# MSigDB gene sets
+
+Since MSigDB gene sets use human gene symbols to map genes to pathways we translated mouse symbols to homologous human symbols using HomologeneDB from NCBI (build 68). 
+
+
+```{r}
+homologene_human_mouse = fread("../../Data/External/homologene_9606_10090.txt")
+all_entrez_ids = data.frame(EntrezID=unique(all_results[[1]]$EntrezID))
+all_symbols = data.frame(GeneSymbol=unique(all_results[[1]]$GeneSymbol))
+a1 = merge(all_symbols, homologene_human_mouse[,c("entrez_1","symbol_1","symbol_2"), with=F], by.x="GeneSymbol", by.y="symbol_2", all.x=T, sort=F)
+
+mouse_to_human=a1
+mouse_to_human = subset(mouse_to_human, !is.na(GeneSymbol) & !is.na(symbol_1) & !symbol_1 == "")
+rownames(mouse_to_human) = mouse_to_human$GeneSymbol
+```
+
+
+# Plots for selected gene sets
+
+```{r}
+sel_genesets_1 = "GAO_LARGE_INTESTINE_24W_C10_ENTEROCYTE
+GAO_LARGE_INTESTINE_24W_C8_GOBLET_CELL
+GAO_LARGE_INTESTINE_24W_C5_LGR5POS_STEM_CELL
+REACTOME_PYRUVATE_METABOLISM_AND_CITRIC_ACID_TCA_CYCLE
+HALLMARK_OXIDATIVE_PHOSPHORYLATION"
+selected_genesets =  c(unlist(strsplit(sel_genesets_1, "\n")) , names(gset_collections_mouse[["CUSTOM_MOUSE"]]), names(gset_collections_human[["CUSTOM_HUMAN"]]) )
+```
+
+```{r, fig.width=16, fig.height=6, results="hide"}
+all_plots = list()
+for (sel_comparison in names(all_results)) {
+  tmp = all_results[[sel_comparison]]
+  # tmp2 = merge(tmp, mouse_to_human, by="GeneSymbol")
+  # tmp2 = subset(tmp2, !is.na(symbol_1))
+  ranks_mouse = unlist(tapply(tmp$t, tmp$GeneSymbol, function(x) x[which(abs(x)==max(abs(x)))] ))
+  tmp =  # those are mostly control probes
+  
+  tmp2 = merge(subset(tmp, !is.na(GeneSymbol)), mouse_to_human, by="GeneSymbol")
+  tmp2 = subset(tmp2, !is.na(symbol_1))
+  ranks_human = unlist(tapply(tmp2$t, tmp2$symbol_1, function(x) x[which(abs(x)==max(abs(x)))] ))
+
+  
+  gg <- strsplit(sel_comparison, "_vs_") |> unlist()
+  up_group <- gg[1]
+  down_group <- gg[2]
+  
+  for (g in selected_genesets) {
+    rr = subset(all_gsea_results[[sel_comparison]], pathway==g)
+    loc = unlist(lapply(gset_collections_human, function(x) grep(paste0("^",g,"$"), names(x) )))
+    if(length(loc)>0) {
+      sel_genes = unlist(gset_collections_human[[names(loc)]][loc])
+      ranks = ranks_human
+    } else {
+      loc = unlist(lapply(gset_collections_mouse, function(x) grep(paste0("^",g,"$"), names(x) )))
+      sel_genes = unlist(gset_collections_mouse[[names(loc)]][loc])
+      ranks = ranks_mouse
+
+    }
+    p = myPlotEnrichment(sel_genes, ranks, group_pos = up_group, group_neg = down_group, color_gene_bars = F, color_pos = "black", color_neg = "black")
+    p1 = p + ggtitle(paste0(g, "\n", sel_comparison), paste("FDR=",prettyNum(rr$FDR_global, digits=2),", p=",prettyNum(rr$pval, digits=2), ", ES=",prettyNum(rr$ES, digits=2), ", NES=",prettyNum(rr$NES, digits=2) ) )  + theme(title = element_text(size=12))
+    #print(p1)
+    all_plots[[paste0(g,"_",sel_comparison)]] = p1
+  }  
+}
+
+all_plots = all_plots[order(names(all_plots))]
+print(marrangeGrob(all_plots, ncol=3, nrow=1))
+
+```
+
+
+### PDF export
+
+All plots have been exported to corresponding files in PDF format in folder `r result_folder`.
+
+<!-- ```{r} -->
+<!-- for (g in selected_genesets) { -->
+<!--   rr = subset(all_gsea_results[[sel_comparison]], pathway==g) -->
+<!--   loc = unlist(lapply(gset_collections_human, function(x) grep(g, names(x)))) -->
+<!--   sel_genes = unlist(gset_collections_human[[names(loc)]][loc]) -->
+<!--   p = myPlotEnrichment(sel_genes, ranks, linewidth = 2) -->
+<!--   pdf(file=file.path(result_folder, paste0(sel_comparison,"_",g, ".pdf")), width=8, height = 6) -->
+<!--   print(p + ggtitle(g, paste("FDR=",prettyNum(rr$FDR_global, digits=2),", p=",prettyNum(rr$pval, digits=2), ", ES=",prettyNum(rr$ES, digits=2), ", NES=",prettyNum(rr$NES, digits=2) ) ) ) -->
+<!--   #print(p + ggtitle(g, paste("Adj.pval=",prettyNum(rr$padj, digits=2), "ES=",prettyNum(rr$ES, digits=2), ", NES=",prettyNum(rr$NES, digits=2) ) ) ) -->
+<!--   dev.off() -->
+<!-- } -->
+<!-- ``` -->
+
+
+```{r}
+for (g in names(all_plots)) {
+  pdf(file=file.path(result_folder, paste0(g, ".pdf")), width=8, height = 6)
+  print(all_plots[[g]])
+  dev.off()
+}
+```
+
+
+# Software versions
+
+```{r}
+sessionInfo()
+```

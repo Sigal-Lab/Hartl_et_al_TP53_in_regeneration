@@ -1,0 +1,175 @@
+---
+title: "Microarray Data - Axin2 Trp53 KO - DGE Analysis with LIMMA"
+author: "Hilmar Berger"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: false
+    number_sections: true
+    code_folding: hide
+    
+pdf_document:
+    fig_caption: true
+date: "`r format(Sys.time(), '%d %B, %Y %H:%M:%S')`"
+---
+
+```{r, messages=FALSE}
+rm(list=ls())
+library(limma)
+library(readxl)
+library(pheatmap)
+library(xtable)
+library(reshape2)
+library(knitr)
+library(writexl)
+library(EnhancedVolcano)
+
+load("../../Data/Processed/Axin2_KO_preprocessed_data.Rdata")
+
+result_folder = "../../Results/Axin2_Trp53_KO"
+if (!file.exists(result_folder)) dir.create(result_folder, recursive=T)
+```
+
+# Introduction
+
+This is data from mouse experiments (Axin2 Trp53 KO, Kimberly Hartl) hybridized as dual channel libraries to Agilent 074809 (SurePrint G3 Mouse GE v2 8x60K) micro arrays. 
+
+
+# Diffential gene expression
+
+Standard dual-channel analysis of differential expression data using LIMMA is applied for comparisons. 
+
+We do the following comparisons: 
+
+  - Axin2 KO vs. WT
+  
+```{r}
+all_results = list()
+
+controls = MA$genes$ControlType!=0
+MA.avg <- avereps(MA[!controls,], ID=MA[!controls,]$genes$ProbeName)
+```
+
+
+```{r}
+#######################################################################
+sel_samples = rownames(ed)
+ed_tmp = ed[sel_samples,]
+
+biolrep = ifelse(ed_tmp$Cy5_replicate=="1487" | ed_tmp$Cy3_replicate=="1487", 1, 2)
+design = ifelse(ed_tmp$Cy5_condition=="KO", 1, -1)
+
+corfit <- duplicateCorrelation(MA.avg, design, ndups = 1, block = biolrep)
+# note that in a previous version lmFit was run erroneously on MA instead of MA.avg. This will not influence GSEA results in a relevant way (has been checked)
+fit <- lmFit(MA.avg, design, block = biolrep, cor = corfit$consensus)
+fit <- eBayes(fit)
+res = topTable(fit, adjust = "BH",number=nrow(fit))
+
+all_results[["Axin2_Trp53_KO_vs_WT"]] = res
+```
+
+
+## Volcano plots
+
+Due to the small replicate number no genes in any of the comparisons reached a significance level of FDR < 5%. We here therefore show unadjusted (raw) p-values noting that **a large part or all of them might be false positive calls**.
+
+```{r, volcano, echo=FALSE, fig.width=8, fig.height=8}
+all_target_conditions = names(all_results)
+par(mfrow=c(1,1), mar=c(8,4,4,2))
+
+for (tc in all_target_conditions) {
+  r = all_results[[tc]]
+  #plot(r$logFC, -log10(r$adj.P.Val),xlab="log2 Fold Change",ylab="-log10(adj. p-val)", ylim=c(0,max(2,max(-log10(r$adj.P.Val),na.rm=T))))
+  #plot(r$logFC, -log10(r$P.Value),xlab="log2 Fold Change",ylab="-log10(raw p-val)", ylim=c(0,max(2,max(-log10(r$P.Value),na.rm=T))))
+  #title(main=tc, sub=paste("(",nrow(subset(r, adj.P.Val < 0.05))," signif. DE genes)",sep="") )
+  #title(main=tc, sub=paste("(",nrow(subset(r, P.Value < 0.05))," signif. DE genes)",sep="") )
+  #abline(h=-log10(0.05),col="red")
+  #abline(v=c(-1,1))
+  p = EnhancedVolcano(r, lab=r$GeneSymbol, x="logFC", y="P.Value")
+  print(p)
+}
+```
+
+
+
+```{r, DE_combined, echo=FALSE, results="hide"}
+###############################################################################################################
+# Write Result Files
+###############################################################################################################
+
+all_DE_results_tmp = list()
+for (tc in all_target_conditions) {
+  tmp = all_results[[tc]]
+  tmp$condition = tc
+  all_DE_results_tmp[[tc]] = tmp
+}
+all_DE_results_ts = do.call(rbind, all_DE_results_tmp)
+all_DE_results_ts$DE_class = ifelse(all_DE_results_ts$adj.P.Val>0.01, "not sign", ifelse(all_DE_results_ts$logFC>0,ifelse(all_DE_results_ts$logFC>1,"Up","Up_weak"), ifelse(all_DE_results_ts$logFC < -1,"Down", "Down_weak")))
+#all_DE_results_ts$DE_class = ifelse(all_DE_results_ts$adj.P.Val>0.01, "n.s.", ifelse(all_DE_results_ts$logFC > 0,"Up","Down"))
+#agg_fun = function(x) paste(unique(x),collapse=";")
+agg_fun = function(x) ifelse("Down" %in% x, "Down",ifelse("Up" %in% x, "Up","not_significant."))
+#agg_fun = function(x) paste(unique(sort(x)), collapse=",")
+all_DE_results_sw = dcast(all_DE_results_ts, GeneSymbol ~ condition, value.var="DE_class", fun.aggregate=agg_fun)
+```
+
+
+```{r, echo=FALSE}
+R.avg <- avereps(RG$R, ID=RG$genes$ProbeName)
+G.avg <- avereps(RG$G, ID=RG$genes$ProbeName)
+colnames(R.avg) = paste(ed[colnames(R.avg),]$Cy5,"_Cy5_label",sep="")
+colnames(G.avg) = paste(ed[colnames(G.avg),]$Cy3,"_Cy3_label",sep="")
+
+intensity_matrix = cbind(R.avg, G.avg)
+norm_intensity_matrix = normalizeBetweenArrays(intensity_matrix, method="quantile")
+```
+
+
+```{r, write_tabs, echo=FALSE}
+
+
+output_file_prefix = paste(result_folder,"Differential_expression_results_", sep="/")
+selected_cols = c("ProbeName", "GeneSymbol", "GeneDescription","EntrezID","logFC","AveExpr","t","P.Value","adj.P.Val","GencodeM22MappingStatus","GeneSymbol_Gencode","Transcript_Type" )
+for (tc in all_target_conditions) {
+  write.table(all_results[[tc]][,selected_cols], file=paste(output_file_prefix, tc, ".txt", sep="" ), row.names=F , sep="\t", dec=".")
+}
+
+short_names = list()
+for (i in names(all_results)) {
+  ii = gsub(" ","_", gsub(",","_",i))
+  short_names[[i]] = ii
+}
+
+DGE_Excel_filename = file.path(result_folder,"DiffExpression.xslx")
+# txt2xlsx_command = paste("python /home/hilmar/Work/Python/tools/txt2xlsx.py -o",DGE_Excel_filename," -L", paste(unlist(short_names),collapse=","),  paste(paste('"', output_file_prefix, names(short_names), '.txt"', sep="" ), collapse=" "), sep=" ")
+# system(txt2xlsx_command)
+
+write_xlsx(all_results, path=DGE_Excel_filename)
+
+
+##############################################
+# Normalized expression values per sample
+anno = unique(RG$genes[,!colnames(RG$genes) %in% c("Row","Col","Start","index")])
+rownames(anno) = anno$ProbeName
+norm_exp_mat = data.frame(ProbeName = rownames(norm_intensity_matrix), log2(norm_intensity_matrix), row.names=NULL, stringsAsFactors = F)
+norm_exp_mat$GeneSymbol = anno[as.character(norm_exp_mat$ProbeName), "GeneSymbol"]
+filename = paste(result_folder,"Normalized_expression_data.txt",sep="/")
+write.table(norm_exp_mat, file=filename,sep="\t",row.names=F)
+
+```
+
+
+```{r}
+output_file = paste(result_folder,"DGE_analysis_image.Rdata", sep="/")
+save(all_results, RG, MA, ed, file=output_file)
+
+filename = paste(result_folder,"DGE_results.Rdata",sep="/")
+exp_design = ed
+save(all_results, exp_design, norm_intensity_matrix, MA, file=filename)
+```
+
+
+# Session Info
+```{r}
+sessionInfo()
+```

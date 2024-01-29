@@ -1,0 +1,286 @@
+---
+title: "Microarray Data Organoids P53KO/KOWI/WT - GSEA analysis on DGE results"
+author: "Hilmar Berger"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: false
+    number_sections: true
+    code_folding: hide
+    
+pdf_document:
+    fig_caption: true
+date: "`r format(Sys.time(), '%d %B, %Y %H:%M:%S')`"
+---
+
+```{r, warning=FALSE, message=FALSE}
+rm(list=ls())
+
+library(reshape2)
+library(pheatmap)
+library(ggplot2)
+library(knitr)
+library(scales)
+library(fgsea)
+library(data.table)
+library(BiocParallel)
+library(readxl)
+library(writexl)
+library(org.Mm.eg.db)
+
+result_folder = "../../Results/Organoids_Trp53_KO_KOWI"
+if (!file.exists(result_folder)) dir.create(result_folder, recursive=T)
+
+set.seed(12345)
+```
+
+# Overview
+
+We here run GSEA on DGE results from microarray of P53KO or KOWI vs. WT (Kimberly Hartly). Data was initially analyzed by Hans Mollenkopf (MPIIB). 
+For analysis, a preranked analysis using the R package fGSEA is used that should give similar results to preranked analysis in standard GSEA. 
+
+** The naming of the comparisons is target_vs_control. **
+
+# MSigDB gene sets
+
+Since MSigDB gene sets use human gene symbols to map genes to pathways we will translate mouse symbols to homologous human symbols using HomologeneDB from NCBI (build 68). 
+
+
+<!-- ```{r} -->
+<!-- input_files = list.files(path=".", pattern = "DGE_RE ") -->
+<!-- names(input_files) = gsub(" vs\\. ", "_vs_", gsub("DGE_RE \\(","", gsub("\\)\\.txt","",input_files))) -->
+
+<!-- all_results = list() -->
+<!-- for (n in names(input_files)) { -->
+<!--   tmp = read.table(input_files[n], sep="\t", header=T, stringsAsFactors = F) -->
+<!--   tmp2 <- strsplit(n, "_") |> unlist() -->
+<!--   n_new <- paste(rev(tmp2),collapse="_") -->
+<!--   # the files provided by Hans Mollenkopf for some reasons contain the human gene symbols for otherwise mouse data -->
+<!--   # We replace these by the correct mouse symbols  -->
+<!--   entrez = unique(as.character(tmp$EntrezGeneID)) -->
+<!--   entrez = entrez[!is.na(entrez)] -->
+<!--   mouse_symbols = select(org.Mm.eg.db, keys=entrez, keytype = "ENTREZID", columns = "SYMBOL") -->
+<!--   rownames(mouse_symbols)  = mouse_symbols$ENTREZID -->
+<!--   tmp$GeneSymbol = mouse_symbols[as.character(tmp$EntrezGeneID), "SYMBOL"] -->
+<!--   all_results[[n_new]] = tmp -->
+<!-- } -->
+
+
+<!-- ``` -->
+
+
+```{r}
+load("../../Results/Organoids_Trp53_KO_KOWI/DGE_results.Rdata")
+```
+
+
+```{r}
+gsea_gmt_folder = "../../Data/External/GeneSets/MSigDB_v7.5"
+gsea_gmt_files = c("h.all.v7.5.symbols.gmt","c2.all.v7.5.symbols.gmt","c3.all.v7.5.symbols.gmt","c5.go.bp.v7.5.symbols.gmt","c6.all.v7.5.symbols.gmt","c7.all.v7.5.symbols.gmt","c8.all.v7.5.symbols.gmt")
+names(gsea_gmt_files) = c("HALLMARK","PATHWAYS","MOTIF","GO_BP","ONCOGENIC","IMMUNOLOGIC","CELLTYPES")
+gset_collections_human = list()
+for (n in names(gsea_gmt_files)) {
+  gset_collections_human[[n]] = gmtPathways(paste(gsea_gmt_folder, gsea_gmt_files[[n]], sep="/") )
+}
+```
+
+We use gene sets from MSigDB.
+
+```{r}
+gsea_gmt_files
+```
+
+# Other gene sets 
+
+  - Munoz et al Small Intestinal Stem Cell Signature (PMID: 22692129, DOI: 10.1038/emboj.2012.166, Supp Table S3 )  
+  - From Barker et al 2010 we include the SC signature of stomach antral Lgr5 cells
+  - Herbst et al Beta-catenine target genes (human, PMID: 24467841)
+  - SPEM signature (Nozaki et al. Gastroenterology 2008, p.511; supp tables 2/3)
+    - YAP-signature (Gregorieff et al. Nature 2015, p.715; supp table 1). We derived three signatures: The original, combined FC of FC(KO)/FC(Tg) and the individual signatures for KO and transgene (Tg)
+  - Fetal vs. adult intestinal cells (Guiu et al. Nature 2019, p.107; derived from published microarray data)
+  - DSS Sca+ vs. Non-DSS (Yui et al. Cell Stem Cell 2017, p.35; derived from published microarray data) 
+
+```{r, message=FALSE}
+known_genes = unique(all_results[[1]]$GeneSymbol)
+
+custom_gene_sets_human = list()
+
+beta_cat_genes = as.data.frame(read_excel("../../Data/External/GeneSets/Wnt target H2014 list.xls", sheet = 1, col_names = F))
+custom_gene_sets_human[["Herbst_et_al_Beta_catenin_targets"]] = unique(beta_cat_genes[, 1])
+
+gset_collections_human[["CUSTOM"]] = custom_gene_sets_human
+
+####################################################################
+
+custom_gene_sets_mouse = list()
+
+tmp = read.table("../../Data/External/GeneSets/Supp_Table_S3_GE_combined_SC_Signature.txt", sep="\t", header=T, stringsAsFactors = F)
+custom_gene_sets_mouse[["Lgr5_SC_Signature_Munoz"]] = unique(tmp$GeneSymbol)
+
+tmp = as.data.frame(read_excel("../../Data/External/GeneSets/Barker2010_Stomach/antral lgr5 signature from barker 2010.xls",sheet=1))
+custom_gene_sets_mouse[["Barker_Antral_SC"]] = unique(tmp[2:nrow(tmp),1])
+
+spem_sig = read.table("../../Data/External/GeneSets/Nozaki_et_al_2008/SPEM_signature.txt", sep="\t", header=T, stringsAsFactors = F)
+custom_gene_sets_mouse[["Nozaki_SPEM_up"]] = subset(spem_sig, direction == "Up" & !is.na(GeneSymbol))$GeneSymbol
+custom_gene_sets_mouse[["Nozaki_SPEM_down"]] = subset(spem_sig, direction == "Down" & !is.na(GeneSymbol))$GeneSymbol
+
+# tmp = as.data.frame(read_excel("S:/AG/AG-Sigal/Research/Documentation/Projects/Hilmar Berger/DataSets/Yap/Gregorieff_et_al/41586_2015_BFnature15382_MOESM27_ESM_Supp_Table_1.xlsx", sheet = 1))
+# 
+# custom_gene_sets_mouse[["Gregorieff_Yap_up"]] = subset(tmp, Fold_log2 > 1 )$Gene_Symbol
+# custom_gene_sets_mouse[["Gregorieff_Yap_down"]] = subset(tmp, Fold_log2 < -1 )$Gene_Symbol
+
+tmp = as.data.frame(read_excel("../../Data/External/GeneSets/Gregorieff_et_al/41586_2015_BFnature15382_MOESM27_ESM_Supp_Table_1.xlsx", sheet = 1))
+
+custom_gene_sets_mouse[["Gregorieff_Yap_comb.FC_up"]] = subset(tmp, Fold_log2 > 1 )$Gene_Symbol
+custom_gene_sets_mouse[["Gregorieff_Yap_comb.FC_down"]] = subset(tmp, Fold_log2 < -1 )$Gene_Symbol
+
+custom_gene_sets_mouse[["Gregorieff_Yap_KO_up"]] = subset(tmp, Yap_KO_log2FC > 1 )$Gene_Symbol
+custom_gene_sets_mouse[["Gregorieff_Yap_KO_down"]] = subset(tmp, Yap_KO_log2FC < -1 )$Gene_Symbol
+
+custom_gene_sets_mouse[["Gregorieff_Yap_Tg_up"]] = subset(tmp, Yap_TG_log2FC > 1 )$Gene_Symbol
+custom_gene_sets_mouse[["Gregorieff_Yap_Tg_down"]] = subset(tmp, Yap_TG_log2FC < -1 )$Gene_Symbol
+
+
+tmp = read.table("../../Data/External/Yui_et_al_CSC_2018/Colitis_vs_control/DGE_Colitis_vs_control.txt", sep="\t", header=T, stringsAsFactors = F)
+
+custom_gene_sets_mouse[["Yui_DSS_colitis_vs_control_up"]] = subset(tmp, logFC > 1 & adj.P.Val < 0.05)$SYMBOL
+custom_gene_sets_mouse[["Yui_DSS_colitis_vs_control_down"]] = subset(tmp, logFC < -1 & adj.P.Val < 0.05)$SYMBOL
+
+tmp = read.table("../../Data/External/Yui_et_al_CSC_2018/Fetal_Adult/DGE_Fetal_vs_Adult.txt", sep="\t", header=T, stringsAsFactors = F)
+
+custom_gene_sets_mouse[["Yui_Fetal_vs_adult_up"]] = subset(tmp, logFC > 1 & adj.P.Val < 0.05)$SYMBOL
+custom_gene_sets_mouse[["Yui_Fetal_vs_adult_down"]] = subset(tmp, logFC < -1 & adj.P.Val < 0.05)$SYMBOL
+
+gset_collections_mouse = list(CUSTOM_MOUSE=custom_gene_sets_mouse)
+
+```
+
+## fGSEA analysis on MSigDB
+
+```{r}
+homologene_human_mouse = fread("../../Data/External/homologene_9606_10090.txt")
+all_entrez_ids = data.frame(EntrezID=unique(all_results[[1]]$EntrezID))
+all_symbols = data.frame(GeneSymbol=unique(all_results[[1]]$GeneSymbol))
+a1 = merge(all_symbols, homologene_human_mouse[,c("entrez_1","symbol_1","symbol_2"), with=F], by.x="GeneSymbol", by.y="symbol_2", all.x=T, sort=F)
+
+mouse_to_human=a1
+mouse_to_human = subset(mouse_to_human, !is.na(GeneSymbol))
+rownames(mouse_to_human) = mouse_to_human$GeneSymbol
+
+```
+
+
+### Human and Mouse gene sets
+
+For analyzing the human MsigDB gene sets we restrict the DGE data to those probesets that have a homologous gene in mouse and human. For those probesets we select the one with the highest t-score and rank the resulting list which is subsequently used for fGSEA analysis. 
+
+For mouse gene sets (i.e. those derived from mouse experiments) we use the full set of genes in the DGE results after collapsing t-scores by gene and ranking. 
+
+```{r}
+data_generation_date = "2024-01-25"
+output_folder = result_folder
+GSEA_datafile = paste(output_folder,"fGSEA_Results.Rdata",sep="/")
+if (!file.exists(output_folder)) dir.create(output_folder, recursive=T)
+
+rerun_GSEA = TRUE
+
+if(rerun_GSEA) {
+  all_gsea_results = list()
+  n_perm = 5000
+  n_proc = 6
+  bpparam = MulticoreParam(worker=n_proc, manager.hostname="127.0.0.1")
+  for (n in names(all_results)) {
+    print(paste("Running FGSEA for comparison",n))
+    gsea_result_tables = list()
+    tmp = subset(all_results[[n]], !is.na(GeneSymbol)) # those are mostly control probes
+    
+    tmp2 = merge(tmp, mouse_to_human, by="GeneSymbol")
+    tmp2 = subset(tmp2, !is.na(symbol_1))
+    ranks = unlist(tapply(tmp2$t, tmp2$symbol_1, function(x) x[which(abs(x)==max(abs(x)))] ))
+  
+    for (gs in names(gset_collections_human)) {
+      print(gs)
+      fgseaRes <- fgsea(gset_collections_human[[gs]], ranks, minSize=15, maxSize=2000, nperm=n_perm, BPPARAM=bpparam)
+      fgseaRes$GeneSetCollection = gs
+      gsea_result_tables[[gs]] = fgseaRes
+    }
+    
+    results_human = do.call(rbind, gsea_result_tables)
+    
+    gsea_result_tables_mouse = list()
+    ranks_mouse = unlist(tapply(tmp$t, tmp$GeneSymbol, function(x) x[which(abs(x)==max(abs(x)))] ))
+    
+    for (gs in names(gset_collections_mouse)) {
+      print(gs)
+      fgseaRes <- fgsea(gset_collections_mouse[[gs]], ranks_mouse, minSize=15, maxSize=2000, nperm=n_perm, BPPARAM=bpparam)
+      fgseaRes$GeneSetCollection = gs
+      gsea_result_tables_mouse[[gs]] = fgseaRes
+    }
+  
+    results_mouse = do.call(rbind, gsea_result_tables_mouse)
+    results_all = rbind(results_human, results_mouse)
+    results_all$FDR_global = p.adjust(results_all$pval, "BH")
+    
+    all_gsea_results[[n]] = results_all
+  }
+  save(all_gsea_results, file=GSEA_datafile)
+  save(gset_collections_human, gset_collections_mouse, file=file.path(output_folder, "Geneset_collections.Rdata"))
+} else {
+  load(GSEA_datafile)
+}
+```
+
+Result files are written to folder `r result_folder`
+
+We export all gene sets with less than 20% FDR (false discovery rate) after global adjustment of p-values per sample. 
+
+```{r}
+FDR_threshold = 0.5
+final_gsea_tabs = list()
+if(rerun_GSEA) {
+  output_file_prefix = paste(result_folder,"fGSEA_Results_", sep="/")
+  for (n in names(all_gsea_results)) {
+    filename = paste(output_file_prefix, n, ".txt", sep="" )
+    tmp = all_gsea_results[[n]]
+    tmp$direction= ifelse(tmp$NES > 0, "Up","Down")
+    tmp = tmp[order(tmp$NES, decreasing=T),]
+    tmp$leadingEdge = unlist(lapply(tmp$leadingEdge, function(x) paste(x, collapse=",")))
+    tmp = subset(tmp, FDR_global < FDR_threshold)
+    col_order = c("pathway","GeneSetCollection","direction","pval","padj","ES","NES","nMoreExtreme","size","leadingEdge", "FDR_global")
+    write.table(tmp[,col_order, with=F], file= filename, row.names=F , sep="\t", dec=".", quote=F, na="")
+    final_gsea_tabs[[n]] = tmp[, col_order, with=F]
+  }
+  
+  
+  DGE_Excel_filename = paste(result_folder,"fGSEA_Results.xlsx",sep="/")
+  write_xlsx(final_gsea_tabs, path=DGE_Excel_filename)
+
+}
+```
+
+
+
+```{r, fig.width=12, fig.height=8}
+gsea_summary = list()
+for (n in names(all_gsea_results)) {
+  tmp = subset(all_gsea_results[[n]], padj < 0.2)
+  r = as.data.frame(table(tmp$GeneSetCollection, ifelse(tmp$ES<0, "Down","Up")))
+  colnames(r) = c("Collection","Direction","Freq")
+  r$Comparison = n
+  gsea_summary[[n]] = r
+}
+
+gsea_summary_df = do.call(rbind, gsea_summary)
+
+ggplot(gsea_summary_df, aes(x=Comparison, y = Freq, fill=Collection)) + geom_bar(stat="identity") + theme_grey(base_size = 14) + theme(axis.text.x = element_text(angle = 60, hjust = 1)) + ggtitle("Number of significant (FDR<20%) gene sets per comparison")
+
+ggplot(gsea_summary_df, aes(x=Comparison, y = Freq, fill=Collection)) + geom_bar(stat="identity") + theme_grey(base_size = 14) + theme(axis.text.x = element_text(angle = 60, hjust = 1)) + ggtitle("Number of significant (FDR<20%) gene sets per comparison") + facet_wrap(~Direction)
+```
+
+
+```{r}
+sessionInfo()
+```
+
+

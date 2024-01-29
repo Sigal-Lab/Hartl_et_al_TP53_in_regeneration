@@ -1,0 +1,4 @@
+Download raw microarray data (CEL files) and sample annotations from Array Express:
+https://www.ebi.ac.uk/arrayexpress/experiments/E-MTAB-5249/
+
+and unpack ZIP archive containing CEL files.

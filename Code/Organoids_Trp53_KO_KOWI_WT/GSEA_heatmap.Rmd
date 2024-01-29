@@ -1,0 +1,103 @@
+---
+title: "Microarray Data of P53KO/KOWI - GSEA analysis on DGE results - Heatmap"
+author: "Hilmar Berger"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: false
+    number_sections: true
+    code_folding: hide
+    
+pdf_document:
+    fig_caption: true
+date: "`r format(Sys.time(), '%d %B, %Y %H:%M:%S')`"
+---
+
+```{r, warning=FALSE, message=FALSE}
+rm(list=ls())
+
+#suppressMessages(library(xlsx))
+library(ggplot2)
+library(knitr)
+library(scales)
+library(fgsea)
+library(data.table)
+
+library(RColorBrewer)
+library(pheatmap)
+
+result_folder = "../../Results/Organoids_Trp53_KO_KOWI"
+if (!file.exists(result_folder)) dir.create(result_folder, recursive=T)
+
+set.seed(12345)
+```
+
+# Overview
+
+This is data from a stomach antrum samples of various mouse experiments hybridized as dual channel libraries to Agilent 014568 micro arrays. 
+
+For analysis, a preranked analysis using the R package fGSEA was used that should give similar results to preranked analysis in standard GSEA. 
+
+
+
+```{r}
+#data_generation_date = "2022-01-13"
+output_folder = result_folder
+GSEA_datafile = file.path(output_folder,"fGSEA_Results.Rdata")
+load(GSEA_datafile)
+load(file.path(output_folder, "Geneset_collections.Rdata"))
+```
+
+
+
+```{r}
+sel_genesets_1 = "GAO_LARGE_INTESTINE_24W_C10_ENTEROCYTE
+GAO_LARGE_INTESTINE_24W_C8_GOBLET_CELL
+GAO_LARGE_INTESTINE_24W_C5_LGR5POS_STEM_CELL
+REACTOME_PYRUVATE_METABOLISM_AND_CITRIC_ACID_TCA_CYCLE
+HALLMARK_OXIDATIVE_PHOSPHORYLATION"
+selected_genesets =  c(unlist(strsplit(sel_genesets_1, "\n")) , names(gset_collections_mouse[["CUSTOM_MOUSE"]]), names(gset_collections_human[["CUSTOM_HUMAN"]]) )
+```
+
+
+```{r}
+results_combined = do.call(rbind, Map(function(n) {tmp = all_gsea_results[[n]]; tmp$comparison=n; return(tmp)}, names(all_gsea_results)))
+```
+
+```{r}
+selected_comparisons = names(all_gsea_results)
+```
+
+
+# All NES values
+
+```{r, fig.height=7}
+tmp = subset(results_combined, comparison %in% selected_comparisons & pathway %in% selected_genesets)
+
+tmp2 = reshape2::dcast(tmp, pathway ~ comparison, value.var="NES")
+gsea_mat = as.matrix(tmp2[, 2:ncol(tmp2)])
+rownames(gsea_mat) <- tmp2$pathway
+
+pheatmap(gsea_mat)
+```
+
+# only significant NES values, setting non-significant to 0
+
+```{r, fig.height=8}
+tmp = subset(results_combined, comparison %in% selected_comparisons & pathway %in% selected_genesets & FDR_global < 0.1)
+
+tmp2 = reshape2::dcast(tmp, pathway ~ comparison, value.var="NES")
+gsea_mat = as.matrix(tmp2[, 2:ncol(tmp2)])
+rownames(gsea_mat) <- tmp2$pathway
+
+gsea_mat[is.na(gsea_mat)] <- 0
+cp = colorRampPalette(c("red","grey90","blue"))
+pheatmap(gsea_mat, color =  cp(100))
+```
+
+# Software versions
+
+```{r}
+sessionInfo()
+```

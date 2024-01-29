@@ -1,0 +1,171 @@
+---
+title: "Microarray Data - Axin2 Trp53 KO - GSEA analysis on DGE results - Plots"
+author: "Hilmar Berger"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: false
+    number_sections: true
+    code_folding: hide
+    
+pdf_document:
+    fig_caption: true
+date: "`r format(Sys.time(), '%d %B, %Y %H:%M:%S')`"
+---
+
+```{r, warning=FALSE, message=FALSE}
+rm(list=ls())
+
+#install.packages(c("ggplot2","knitr","scales","data.table","gridExtra","BiocManager") )
+#BiocManager::install("fgsea","limma")
+
+
+#suppressMessages(library(xlsx))
+library(ggplot2)
+library(knitr)
+library(scales)
+library(fgsea)
+library(data.table)
+library(gridExtra)
+
+source("../../../../r_utils/fGSEA_plot_functions.R")
+
+result_folder = "../../Results/Axin2_Trp53_KO"
+set.seed(12345)
+```
+
+
+# Overview
+
+This is data from a stomach corpus samples of mouse experiments (Axin2 Trp53 KO) hybridized as dual channel libraries to Agilent 074809 (SurePrint G3 Mouse GE v2 8x60K) micro arrays. 
+
+For analysis, a preranked analysis using the R package fGSEA was used that should give similar results to preranked analysis in standard GSEA. 
+
+
+```{r}
+load("../../Results/Axin2_Trp53_KO/DGE_results.Rdata")
+```
+
+```{r}
+output_folder = "../../Results/Axin2_Trp53_KO"
+GSEA_datafile = file.path(output_folder,"fGSEA_Results.Rdata")
+load(GSEA_datafile)
+load(file.path(output_folder, "Geneset_collections.Rdata"))
+```
+
+
+# MSigDB gene sets
+
+Since MSigDB gene sets use human gene symbols to map genes to pathways we translated mouse symbols to homologous human symbols using HomologeneDB from NCBI (build 68). 
+
+
+```{r}
+homologene_human_mouse = fread("../../Data/External/homologene_9606_10090.txt")
+all_entrez_ids = data.frame(EntrezID=unique(all_results[[1]]$EntrezID))
+all_symbols = data.frame(GeneSymbol=unique(all_results[[1]]$GeneSymbol))
+a1 = merge(all_symbols, homologene_human_mouse[,c("entrez_1","symbol_1","symbol_2"), with=F], by.x="GeneSymbol", by.y="symbol_2", all.x=T, sort=F)
+
+mouse_to_human=a1
+mouse_to_human = subset(mouse_to_human, !is.na(GeneSymbol) & !is.na(symbol_1) & !symbol_1 == "")
+rownames(mouse_to_human) = mouse_to_human$GeneSymbol
+```
+
+
+# Plots for selected gene sets
+
+```{r}
+selected_genesets = c("Lgr5_SC_Signature_Munoz", "Yui_DSS_colitis_vs_control_down", "Yui_DSS_colitis_vs_control_up", "Gregorieff_Yap_KO_up", "Gregorieff_Yap_KO_down", "Gregorieff_Yap_Tg_up", "Gregorieff_Yap_Tg_down")
+```
+
+```{r, fig.width=16, fig.height=6, results="hide"}
+all_plots = list()
+for (sel_comparison in names(all_results)) {
+  tmp = all_results[[sel_comparison]]
+  # tmp2 = merge(tmp, mouse_to_human, by="GeneSymbol")
+  # tmp2 = subset(tmp2, !is.na(symbol_1))
+  ranks_mouse = unlist(tapply(tmp$t, tmp$GeneSymbol, function(x) x[which(abs(x)==max(abs(x)))] ))
+
+  tmp2 = merge(subset(tmp, !is.na(GeneSymbol)), mouse_to_human, by="GeneSymbol")
+  tmp2 = subset(tmp2, !is.na(symbol_1))
+  ranks_human = unlist(tapply(tmp2$t, tmp2$symbol_1, function(x) x[which(abs(x)==max(abs(x)))] ))
+
+  gg <- strsplit(sel_comparison, "_vs_") |> unlist()
+  up_group <- gg[1]
+  down_group <- gg[2]
+  
+  for (g in selected_genesets) {
+    rr = subset(all_gsea_results[[sel_comparison]], pathway==g)
+    loc = unlist(lapply(gset_collections_human, function(x) grep(paste0("^",g,"$"), names(x) )))
+    if(length(loc)>0) {
+      sel_genes = unlist(gset_collections_human[[names(loc)]][loc])
+      ranks = ranks_human
+    } else {
+      loc = unlist(lapply(gset_collections_mouse, function(x) grep(paste0("^",g,"$"), names(x) )))
+      sel_genes = unlist(gset_collections_mouse[[names(loc)]][loc])
+      ranks = ranks_mouse
+
+    }
+    p = myPlotEnrichment(sel_genes, ranks, group_pos = up_group, group_neg = down_group)
+    p1 = p + ggtitle(paste0(g, "\n", sel_comparison), paste("FDR=",prettyNum(rr$FDR_global, digits=2),", p=",prettyNum(rr$pval, digits=2), ", ES=",prettyNum(rr$ES, digits=2), ", NES=",prettyNum(rr$NES, digits=2) ) )  + theme(title = element_text(size=12))
+    #print(p1)
+    all_plots[[paste0(g,"_",sel_comparison)]] = p1
+  }  
+}
+
+all_plots = all_plots[order(names(all_plots))]
+print(marrangeGrob(all_plots, ncol=3, nrow=1))
+
+```
+
+
+### PDF export
+
+All plots have been exported to corresponding files in PDF format in folder `r result_folder`.
+
+```{r}
+for (sel_comparison in names(all_results)) {
+  for (g in selected_genesets) {
+    tmp = all_results[[sel_comparison]]
+
+    ranks_mouse = unlist(tapply(tmp$t, tmp$GeneSymbol, function(x) x[which(abs(x)==max(abs(x)))] ))
+
+    tmp2 = merge(subset(tmp, !is.na(GeneSymbol)), mouse_to_human, by="GeneSymbol")
+    tmp2 = subset(tmp2, !is.na(symbol_1))
+    ranks_human = unlist(tapply(tmp2$t, tmp2$symbol_1, function(x) x[which(abs(x)==max(abs(x)))] ))
+    
+    
+    gg <- strsplit(sel_comparison, "_vs_") |> unlist()
+    up_group <- gg[1]
+    down_group <- gg[2]
+    
+    
+    rr = subset(all_gsea_results[[sel_comparison]], pathway==g)
+      loc = unlist(lapply(gset_collections_human, function(x) grep(paste0("^",g,"$"), names(x) )))
+      if(length(loc)>0) {
+        sel_genes = unlist(gset_collections_human[[names(loc)]][loc])
+        ranks = ranks_human
+      } else {
+        loc = unlist(lapply(gset_collections_mouse, function(x) grep(paste0("^",g,"$"), names(x) )))
+        sel_genes = unlist(gset_collections_mouse[[names(loc)]][loc])
+        ranks = ranks_mouse
+  
+    }
+    p = myPlotEnrichment(sel_genes, ranks, linewidth = 2, group_pos = up_group, group_neg = down_group)
+    pdf(file=file.path(result_folder, paste0(sel_comparison,"_",g, ".pdf")), width=8, height = 6)
+    print(p + ggtitle(g, paste("FDR=",prettyNum(rr$FDR_global, digits=2),", p=",prettyNum(rr$pval, digits=2), ", ES=",prettyNum(rr$ES, digits=2), ", NES=",prettyNum(rr$NES, digits=2) ) ) )
+    #print(p + ggtitle(g, paste("Adj.pval=",prettyNum(rr$padj, digits=2), "ES=",prettyNum(rr$ES, digits=2), ", NES=",prettyNum(rr$NES, digits=2) ) ) )
+    dev.off()
+  }
+}  
+```
+
+
+
+# Software versions
+
+```{r}
+sessionInfo()
+```
+
+

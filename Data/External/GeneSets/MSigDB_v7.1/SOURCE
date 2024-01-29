@@ -1,0 +1,12 @@
+Download MSigDB gene sets from here: 
+http://www.gsea-msigdb.org/gsea/msigdb/download_file.jsp?filePath=/msigdb/release/7.1/msigdb_v7.1_files_to_download_locally.zip
+and unzip into this folder. 
+
+You should obtain at least the following files:
+
+c2.all.v7.1.symbols.gmt
+c3.all.v7.1.symbols.gmt
+c5.bp.v7.1.symbols.gmt
+c6.all.v7.1.symbols.gmt
+c7.all.v7.1.symbols.gmt
+h.all.v7.1.symbols.gmt
