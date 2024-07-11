@@ -48,7 +48,8 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 
-.html
-.RData
-.Rdata
-
+*.html
+*.RData
+*.Rdata
+*.gmt
+*.pdf
