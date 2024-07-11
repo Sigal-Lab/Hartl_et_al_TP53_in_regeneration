@@ -1,0 +1,18 @@
+BASE_FOLDER=~/sc-scratch-cc13-multiplex_ihc-pipeline/HB/Kimberly_WGS
+DATA_FOLDER=${BASE_FOLDER}/mapping/BWA-MEM_with_markdup
+GENOME_INDEX=${BASE_FOLDER}/../GATK/mm10/BWA_index/GRCm38.fa
+RESOURCES_FOLDER=${BASE_FOLDER}/../GATK/mm10
+SAMTOOLS=$(which samtools)
+METADATA_FOLDER=${BASE_FOLDER}/metadata/
+REGIONS=${BASE_FOLDER}/../GATK/mm10/call_regions_mm10_without_MaSat.bed
+
+#SAMPLES=$(cut -f 1 $METADATA_FOLDER/all_samples.txt)
+
+SAMPLES="P3397_DNA_03_5001KOWIK1 P3397_DNA_02_5020WT"
+
+export APPTAINER_CACHEDIR=~/sc-scratch-cc13-multiplex_ihc-pipeline/HB/apptainer_cache
+
+for sample in $SAMPLES; do
+     sbatch -o GATK_${sample}.out -e GATK_${sample}.err ${BASE_FOLDER}/scripts/DNASeq_calling_pipeline_single_sample_mouse_simple.sh $DATA_FOLDER $sample $REGIONS $RESOURCES_FOLDER
+done
+

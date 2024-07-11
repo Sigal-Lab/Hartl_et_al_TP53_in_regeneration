@@ -1,0 +1,25 @@
+ClusterID	Type	Label	Markers
+0	Leukocytes	Mo/MF	MjV
+1	Stroma	Base crypt FB 1	MjV
+2	Epithelial	SC/TA/Enterocyte precursor	MjV
+3	Epithelial	Colonocyte mature	MjV
+4	Epithelial	Enterocyte precursor	MjV
+5	Stroma	Crypt FB	MjV
+6	Epithelial	Goblet	MjV
+7	Epithelial	TA prolif	MjV
+8	Epithelial	Immature colonocyte	MjV
+9	Leukocytes	B-cell/Plasma cell	MjV
+10	Leukocytes	T-cell	MjV
+11	Stroma	MyoFB	MjV
+12	Stroma	VascEndo	MjV
+13	Stroma	Base crypt FB 2	MjV
+14	Leukocytes	Neutrophils	MjV
+15	Leukocytes	Dendritic cells	MjV
+16	Epithelial	Enteroendocrine	MjV
+17	Stroma	ICC/MuralLikeFB	MjV
+18	Stroma	Lymphatic endothelium	MjV
+19	Stroma	Smooth muscle	MjV
+20	Stroma	Glia	MjV
+21	Stroma	FB3	MjV
+22	Epithelial	Tuft	MjV
+23	Stroma	Pericytes	MjV

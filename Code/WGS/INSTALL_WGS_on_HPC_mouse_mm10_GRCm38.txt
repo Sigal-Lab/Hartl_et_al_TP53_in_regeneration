@@ -1,0 +1,111 @@
+#!/usr/bin/bash
+
+# in the scratch part of the HPC cluster
+cd ~/sc-scratch-cc13-multiplex_ihc-pipeline/HB
+
+# Software
+###################################################################################
+# CONDA setup
+###################################################################################
+
+conda create -n WGS
+conda activate WGS
+
+mamba install -c bioconda bwa
+mamba install -c bioconda samtools
+mamba install -c bioconda picard
+mamba install -c bioconda control-freec
+mamba install -c bioconda bcftools
+mamba install -c bioconda svaba
+mamba install -c bioconda snpeff
+mamba install -c bioconda gridss
+# then install BSgenome.Mmusculus.UCSC.mm10 (required by gridss). The installation of BSgenome/BSgenome.Mmusculus from bioconda seems to be broken, so better install both packages directly from within R
+conda install bioconda::gem3-mapper
+
+
+# use GATK from docker container
+# see https://gatk.broadinstitute.org/hc/en-us/articles/360035889991
+pushd ..
+mkdir apptainer_cache
+popd
+
+# make sure the cached version is located on scratch as this might be big and exceed quotas
+export APPTAINER_CACHEDIR=~/sc-scratch-cc13-multiplex_ihc-pipeline/HB/apptainer_cache
+
+apptainer exec --containall docker://broadinstitute/gatk:4.2.6.1 gatk -h
+# newest version still compatible with old java 8: broadinstitute/gatk:4.3.0.0
+# later use singularity exec --containall --bind ${cwd}:${docker_cwd} docker://gatk:4.2.6.1 ${job_shell} ${docker_script}
+
+
+###################################################################################
+# Prepare reference data
+###################################################################################
+
+# taken partially from https://zqfang.github.io/2020-03-10-gatk4-mm10-bundle/
+# Download mm10/GRCm38 ref genome
+mkdir -p GATK/mm10
+pushd GATK/mm10
+# this has the wrong sequence identitifer, not 1...23 + XY + contig IDs
+#wget https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/635/GCF_000001635.26_GRCm38.p6/GCF_000001635.26_GRCm38.p6_genomic.fna.gz -O GRCm38_68.fa.gz
+# this one is the correct one
+wget https://ftp.ensembl.org/pub/release-102/fasta/mus_musculus/dna/Mus_musculus.GRCm38.dna.primary_assembly.fa.gz
+
+mkdir BWA_index
+pushd BWA_index
+gzip -dc ../Mus_musculus.GRCm38.dna.primary_assembly.fa.gz > GRCm38.fa
+bwa index GRCm38.fa
+popd
+
+# create ref FASTA index and dict for GATK
+gzip -dc Mus_musculus.GRCm38.dna.primary_assembly.fa.gz > Mus_musculus.GRCm38.dna.primary_assembly.fa
+picard CreateSequenceDictionary R=Mus_musculus.GRCm38.dna.primary_assembly.fa O=Mus_musculus.GRCm38.dna.primary_assembly.dict
+samtools faidx Mus_musculus.GRCm38.dna.primary_assembly.fa
+
+# download SNP information
+wget ftp://ftp.ncbi.nih.gov/snp/organisms/archive/mouse_10090/VCF/00-All.vcf.gz -O mouse.dbsnp.vcf.gz
+
+# These are too big - we will go with the strain specific variants below
+# see https://www.jax.org/research-and-faculty/genetic-diversity-initiative/tools-data/diversity-outbred-reference-data
+#wget https://ftp.ebi.ac.uk/pub/databases/mousegenomes/REL-1505-SNPs_Indels/mgp.v5.merged.snps_all.dbSNP142.vcf.gz
+#wget https://ftp.ebi.ac.uk/pub/databases/mousegenomes/REL-1505-SNPs_Indels/mgp.v5.merged.snps_all.dbSNP142.vcf.gz.tbi
+#wget https://ftp.ebi.ac.uk/pub/databases/mousegenomes/REL-1505-SNPs_Indels/mgp.v5.merged.indels.dbSNP142.normed.vcf.gz
+
+#BL/6 specific SNPs/indels
+wget https://ftp.ebi.ac.uk/pub/databases/mousegenomes/REL-1505-SNPs_Indels/strain_specific_vcfs/C57BL_6NJ.mgp.v5.snps.dbSNP142.vcf.gz
+wget https://ftp.ebi.ac.uk/pub/databases/mousegenomes/REL-1505-SNPs_Indels/strain_specific_vcfs/C57BL_6NJ.mgp.v5.snps.dbSNP142.vcf.gz.tbi
+wget https://ftp.ebi.ac.uk/pub/databases/mousegenomes/REL-1505-SNPs_Indels/strain_specific_vcfs/C57BL_6NJ.mgp.v5.indels.dbSNP142.normed.vcf.gz
+wget https://ftp.ebi.ac.uk/pub/databases/mousegenomes/REL-1505-SNPs_Indels/strain_specific_vcfs/C57BL_6NJ.mgp.v5.indels.dbSNP142.normed.vcf.gz.tbi
+
+# index feature files for GATK BQSR
+apptainer exec --containall --bind $(readlink -f /home/bergerh/sc-scratch-cc13-multiplex_ihc-pipeline/HB/GATK/mm10) docker://broadinstitute/gatk:4.2.6.1 gatk IndexFeatureFile -I $(readlink -f C57BL_6NJ.mgp.v5.indels.dbSNP142.normed.vcf)
+apptainer exec --containall --bind $(readlink -f /home/bergerh/sc-scratch-cc13-multiplex_ihc-pipeline/HB/GATK/mm10) docker://broadinstitute/gatk:4.2.6.1 gatk IndexFeatureFile -I $(readlink -f C57BL_6NJ.mgp.v5.snps.dbSNP142.vcf)
+
+###############################################################################
+# for ControlFreeC
+# per-chromosome files 
+mkdir GRCm38_chr_files
+pushd GRCm38_chr_files
+# adapted from https://stackoverflow.com/questions/21476033/splitting-a-multiple-fasta-file-into-separate-files-keeping-their-original-names
+awk 'BEGIN{RS=">";FS="\n"} NR>1{split($1, nn, " "); fnme=nn[1]".fasta"; print ">" $0 > fnme; close(fnme);}' ../Mus_musculus.GRCm38.dna.primary_assembly.fa
+popd
+
+# generate mappability file 
+# This takes a long time
+gem-indexer -T 10 -i Mus_musculus.GRCm38.dna.primary_assembly.fa -o GRCm38.gem                                                                                                                                                                                
+gem-mappability -I GRCm38.gem -T 10 -o GRCm38_150bp_mappability.gem -l 150 
+##############################################################################
+
+## optional: keep only PASSing indels
+## take header first
+#zcat mgp.v5.indels.vcf.gz | head -1000 | grep "^#" | cut -f 1-8 > mgp.v5.indels.pass.chr.vcf
+## keep only passing and append
+#zcat mgp.v5.indels.vcf.gz | grep -v "^#" | cut -f 1-8 | grep -w "PASS"  >> mgp.v5.indels.pass.chr.vcf
+#
+#gatk SortVcf -SD GRCm38_68.dict -I mgp.v5.indels.pass.chr.vcf -O mgp.v5.indels.pass.chr.sort.vcf
+
+# Download snpEff annotations
+snpEff download GRCm38.99   
+
+popd
+
+

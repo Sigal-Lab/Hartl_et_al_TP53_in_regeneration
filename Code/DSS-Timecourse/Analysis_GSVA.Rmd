@@ -1,0 +1,163 @@
+---
+title: "GSVA colitis time course"
+author: "Hilmar Berger"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: false
+    number_sections: true
+    code_folding: hide
+    
+pdf_document:
+    fig_caption: true
+date: "`r format(Sys.time(), '%d %B, %Y %H:%M:%S')`"
+---
+
+```{r, message=FALSE}
+library(ggplot2)
+library(pheatmap)
+library(GSVA)
+library(SummarizedExperiment)
+library(DESeq2)
+library(data.table)
+library(msigdbr)
+library(readxl)
+
+library(fgsea)
+```
+
+
+# MSigDB
+
+We use the P53 and YAP associated gene sets from MSigDB HALLMARK and C2+C6 collections for analysis.
+
+
+  
+
+We exclude P53 associated gene sets with > 500 genes (this affects mainly MARTINEZ, PEREZ and BRUINS gene sets).
+
+<!-- C2:CP, C3:TFT:GTRD, C5:GO_BP,  -->
+
+```{r}
+gs_tab = rbind(msigdbr::msigdbr(species="Mus musculus", cat="H"))
+
+ee2 = msigdbr(species = "Mus musculus", category = "C2", subcategory = "CGP")
+ee2 <- ee2[grepl("YAP|FISCHER|P53",ee2$gs_name),]
+ee3 <- msigdbr(species = "Mus musculus", category = "C6")
+ee3 <- ee3[grepl("CORDENONSI_YAP_CONSERVED_SIGNATURE", ee3$gs_name), ]
+
+gs_tab <- rbind(subset(gs_tab, grepl("P53", gs_name)), ee2, ee3)
+
+
+gs = tapply(gs_tab$gene_symbol, gs_tab$gs_name, list)
+```
+
+## Genes in TP53 gene sets
+
+```{r, fig.width=10, fig.height=7}
+
+p53_sets <- names(gs)[grepl("P53",names(gs))]
+
+aa <- Map(function(x, n) {data.frame(gene=x, gs=n)}, gs[p53_sets], p53_sets) |> do.call(rbind, args=_)
+gf <- table(aa$gene) |> sort(decreasing = T)
+
+aa_sw <- reshape2::dcast(aa, gene ~ gs)
+am <- as.matrix(aa_sw[, 2:ncol(aa_sw)])
+rownames(am) <- aa_sw$gene
+
+pheatmap(t(am))
+
+shared_p53_genes <- names(gf)[gf>1]
+gs[["P53_GENES_SHARED_ACROSS_GENESETS"]] <- shared_p53_genes
+```
+
+We add a synthetic gene set **P53_GENES_SHARED_ACROSS_GENESETS** that contains all genes found in more than one P53-associated gene set (n=`r length(shared_p53_genes)` genes from `r length(p53_sets)`).
+
+
+# GSE214600 - Peters et al., *A temporal classifier predicts histopathology state and parses acute-chronic phasing in inflammatory bowel disease patients*
+
+We here only include timepoint t=12d and only samples from distal (DC) or whole (WC) colon, since those from proximal showed a much weaker response to DSS and clustered near control samples. 
+
+## GSVA analysis 
+
+```{r}
+load("./GSE214600.Rdata")
+sel_samples = subset(ed, day==12 & site %in% c("WC","DC")) |> rownames()
+```
+
+
+```{r, message=FALSE, results='hide'}
+rr = gsva(expr[, sel_samples], gs, kcdf="Gaussian")
+rr = rr[order(rownames(rr)),]
+rr_all = rr
+```
+
+## Hallmark and p53/YAP sets
+
+```{r, fig.width=14, fig.height=14}
+anno_cols = list(treatment = c("ctrl"="green3", "DSS"="red"), 
+                 site = c("WC"="grey","DC"="blue"))
+
+col_anno = ed[, c("day","treatment","site","tp")]
+rr = rr_all[grepl("^HALLMARK|P53|YAP|FISCHER", rownames(rr_all)), ]
+pheatmap(rr, cluster_cols = T, cluster_rows = T, main="GSVA scores per sample and cluster marker gene set", labels_col = ed[colnames(rr), "group2"], annotation_col = col_anno, annotation_colors = anno_cols, fontsize_row = 12)
+
+rr_o <- rr[, order(ed[colnames(rr), "group"]) ]
+pheatmap(rr_o, cluster_cols = F, cluster_rows = T, main="GSVA scores per sample and cluster marker gene set", labels_col = ed[colnames(rr_o), "group2"], annotation_col = col_anno, annotation_colors = anno_cols, fontsize_row = 12)
+
+```
+
+### Averaged GSVA scores per group
+
+```{r, fig.width=8, fig.height=14}
+pheatmap(limma::avearrays(rr, ID=ed[colnames(rr), "group"]), cluster_rows=T, fontsize_row = 8)
+```
+
+
+
+### Boxplots for all gene sets
+
+
+### Boxplots for selected gene sets
+
+```{r}
+sel_p53_sets <- c("HALLMARK_P53_PATHWAY",
+                  "AMUNDSON_DNA_DAMAGE_RESPONSE_TP53",
+                  "FISCHER_DIRECT_P53_TARGETS_META_ANALYSIS",
+                  "INGA_TP53_TARGETS",
+                  "ONGUSAHA_TP53_TARGETS",
+                  "RAHMAN_TP53_TARGETS_PHOSPHORYLATED",
+                  "SCHAVOLT_TARGETS_OF_TP53_AND_TP63", 
+                  "TANG_SENESCENCE_TP53_TARGETS_DN"
+                  )
+```
+
+
+```{r, fig.width=14, fig.height=6}
+rr_ts <- reshape2::melt(rr_all[sel_p53_sets,])
+colnames(rr_ts) <- c("gs_name", "sample","score")
+rr_ts <- merge(rr_ts, ed[, c("day","treatment","site","tp", "group","group2")], by.x="sample", by.y=0, all.x=T, sort=F)
+
+
+#for (n in 1:(floor(nrow(rr)/(4*3))+1) ) {
+  p <- ggplot(rr_ts, aes(x=group, y=score, fill=group)) + 
+    geom_boxplot() + 
+    geom_point() +
+    #ggforce::facet_wrap_paginate(~gs_name, ncol = 4 , nrow = 3, page = n, scales="free_y") + 
+    facet_wrap(~gs_name, nrow = 2, scales="free_y") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size=14), axis.text.y=element_text(size=14), strip.text = element_text(size=7)) + 
+    ggpubr::stat_compare_means(method="wilcox.test", vjust = .5) + 
+    labs(x="", y="GSVA score")
+  print(p)
+  
+#}  
+
+```
+
+
+```{r}
+pdf("Selected_P53_Gene_Sets_GSVA_Peters.pdf", width=14, height = 6)
+print(p)
+dev.off()
+```

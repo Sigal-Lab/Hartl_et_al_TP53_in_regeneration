@@ -75,6 +75,8 @@ gsea_gmt_files
   - Herbst et al Beta-catenine target genes (human, PMID: 24467841)
   - YAP-signature (Gregorieff et al. Nature 2015, p.715; supp table 1). We derived three signatures: The original, combined FC of FC(KO)/FC(Tg) and the individual signatures for KO and transgene (Tg)
   - Fetal vs. adult intestinal cells (Yui et al. Cell Stem Cell 2017, p.107; derived from published microarray data, https://doi.org/10.1016/j.stem.2017.11.001)
+  - Kleeman et al Wnt targets
+  - CCA Wnt targets als Boulter et al. 
 
   
 ```{r}
@@ -84,6 +86,9 @@ custom_gene_sets_human = list()
 
 beta_cat_genes = as.data.frame(read_excel("../../Data/External/GeneSets/Wnt target H2014 list.xls", sheet = 1, col_names = F))
 custom_gene_sets_human[["Herbst_et_al_Beta_catenin_targets"]] = unique(beta_cat_genes[, 1])
+
+cca_wnt_genes = read.table("S:/AG/AG-Sigal/Research/Documentation/Projects/Hilmar Berger/Analysen/Kimberly Hartl/Wnt_2024-06/Boulter_Supp_Tab_2.txt", sep="\t", header=T, skip=1)
+custom_gene_sets_human[["Boulter_Wnt_genes"]] = unique(cca_wnt_genes$Symbol)
 
 gset_collections_human[["CUSTOM"]] = custom_gene_sets_human
 
@@ -117,6 +122,12 @@ tmp = read.table("../../Data/External/Yui_et_al_CSC_2018/Colitis_vs_control/DGE_
 
 custom_gene_sets_mouse[["Yui_DSS_colitis_vs_control_up"]] = subset(tmp, logFC > 1 & adj.P.Val < 0.05)$SYMBOL
 custom_gene_sets_mouse[["Yui_DSS_colitis_vs_control_down"]] = subset(tmp, logFC < -1 & adj.P.Val < 0.05)$SYMBOL
+
+wnt_tmp <- readxl::read_excel("S:/AG/AG-Sigal/Research/Documentation/Projects/Hilmar Berger/References/genesets/Kleeman_Wnt/SuppTable5_reformatted.xlsx", sheet=1) |> as.data.frame()
+
+wnt_genes_mouse <- split(wnt_tmp$Gene, wnt_tmp$Geneset) |> lapply(function(x) {homologene::human2mouse(x, homologene::homologeneData2)$mouseGene })
+names(wnt_genes_mouse) <- paste0("KLEEMAN_",make.names(names(wnt_genes_mouse)))
+custom_gene_sets_mouse <- append(custom_gene_sets_mouse, wnt_genes_mouse)
 
 gset_collections_mouse = list(CUSTOM_MOUSE=custom_gene_sets_mouse)
 
@@ -153,7 +164,9 @@ rerun_GSEA = TRUE
 if(rerun_GSEA) {
   all_gsea_results = list()
   n_perm = 5000
-  n_proc = 8
+  n_proc = 6
+  #min_size = 15
+  min_size = 8
   bpparam = MulticoreParam(worker=n_proc)#MulticoreParam(worker=n_proc, manager.hostname="127.0.0.1")
   for (n in names(all_results)) {
     print(paste("Running FGSEA for comparison",n))
@@ -166,7 +179,7 @@ if(rerun_GSEA) {
   
     for (gs in names(gset_collections_human)) {
       print(gs)
-      fgseaRes <- fgsea(gset_collections_human[[gs]], ranks, minSize=15, maxSize=2000, nperm=n_perm, BPPARAM=bpparam)
+      fgseaRes <- fgsea(gset_collections_human[[gs]], ranks, minSize = min_size, maxSize=2000, nperm=n_perm, BPPARAM=bpparam)
       fgseaRes$GeneSetCollection = gs
       gsea_result_tables[[gs]] = fgseaRes
     }
@@ -178,7 +191,7 @@ if(rerun_GSEA) {
     
     for (gs in names(gset_collections_mouse)) {
       print(gs)
-      fgseaRes <- fgsea(gset_collections_mouse[[gs]], ranks_mouse, minSize=15, maxSize=2000, nperm=n_perm, BPPARAM=bpparam)
+      fgseaRes <- fgsea(gset_collections_mouse[[gs]], ranks_mouse, minSize = min_size, maxSize=2000, nperm=n_perm, BPPARAM=bpparam)
       fgseaRes$GeneSetCollection = gs
       gsea_result_tables_mouse[[gs]] = fgseaRes
     }

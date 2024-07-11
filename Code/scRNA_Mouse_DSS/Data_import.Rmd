@@ -1,0 +1,288 @@
+---
+title: "Fzd_Wnt_ab + DSS mouse colon - Data import"
+author: "Hilmar Berger"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: false
+    number_sections: true
+    code_folding: hide
+    
+pdf_document:
+    fig_caption: true
+date: "`r format(Sys.time(), '%d %B, %Y %H:%M:%S')`"
+---
+
+```{r, message=FALSE}
+rm(list=ls())
+library(Seurat)
+library(ggplot2)
+
+library(readxl)
+library(knitr)
+library(data.table)
+library(cowplot)
+
+library(GEOquery)
+
+
+data_storage_folder = file.path("./Results/data_storage","2024-03-21")
+if (!file.exists(data_storage_folder)) dir.create(data_storage_folder, recursive=T)
+
+
+```
+
+# Overview
+
+scRNA seq count data has been downloaded from GSE201723. 
+
+
+```{r}
+mat_files = list.files(path="../CellRanger/", pattern = "*.mtx.gz", recursive = T, full.names = T)
+mat_files = mat_files[grepl("filtered_feature_bc_matrix",mat_files)]
+folders = dirname(mat_files)
+sample_ids = unlist(sapply(strsplit(folders,"/"), function(x) x[length(x)-2] ) )
+names(folders) = sample_ids
+
+all_sample_data = list()
+for (n in sample_ids) {
+  dir(path=folders[n])
+  tmp = Read10X( folders[n] )
+  all_sample_data[[n]] = CreateSeuratObject(tmp, project=n)
+}
+
+all_ge_data_raw = merge(all_sample_data[[1]], all_sample_data[2:length(all_sample_data)])
+rm(all_sample_data)
+gc(verbose=F)
+
+gset <- getGEO("GSE201723")
+pheno <- pData(gset[[1]])
+tmp <- strsplit(gsub(", scRNA-seq|, scRNAseq","",pheno$title),"replicate ")
+
+group_translation <- c("Uninjured_24hr"="d5_24h_Uninj","anti-GFP_24hr"="d5_24h_aGFP","SZN1326p_24hr"="d5_24h_SWAP", "Uninjured_48hr"="d6_48h_Uninj", "anti-GFP_48hr"="d6_48h_aGFP", "SZN1326p_48hr"= "d6_48h_SWAP")
+pheno$exptCond <- group_translation[pheno$`treatment:ch1`]
+pheno$batch <- paste0(pheno$exptCond,"_", sapply(tmp, `[`,2))
+
+all_ge_data_raw@meta.data$sampleID = pheno[all_ge_data_raw$orig.ident, "batch"]
+all_ge_data_raw@meta.data$condition = pheno[all_ge_data_raw$orig.ident, "exptCond"]
+
+rownames(pheno) <- pheno$batch
+
+cell_anno <- fread("../Raw/GSE201723_SRZ_colon_metaData.tsv.gz")
+cell_anno[, geo_id:=pheno[batch, "geo_accession"]]
+cell_anno[, cell_id_new:=paste0(geo_id, "_", sapply(strsplit(V1,"-"), `[`,1),"-1") ]
+
+setkey(cell_anno, "cell_id_new")
+# Note that the new CR v6 extraction has about 32k cells while cell_anno has only about 22k
+all_ge_data_raw@meta.data$cell_type = cell_anno[Cells(all_ge_data_raw)]$tissueLayer
+all_ge_data_raw@meta.data$cell_label = cell_anno[Cells(all_ge_data_raw)]$cellType
+all_ge_data_raw@meta.data$geo_id <- all_ge_data_raw$orig.ident
+all_ge_data_raw$orig.ident = all_ge_data_raw$sampleID
+```
+
+
+<!-- ```{r} -->
+<!-- ed = as.data.frame(read_excel("../SampleDescription.xlsx", sheet = 1), stringsAsFactors = F) -->
+<!-- rownames(ed) <- NULL -->
+<!-- kable(ed) -->
+<!-- ``` -->
+
+<!-- # Data import -->
+
+<!-- ```{r} -->
+<!-- reload_data_stage1 = F -->
+
+<!-- stage1_file = file.path(data_storage_folder, "All_Raw_scData_stage1.Rdata") -->
+
+<!-- if(reload_data_stage1) { -->
+<!--   mat_files = list.files(path="../CellRanger/", pattern = "*.mtx.gz", recursive = T, full.names = T) -->
+<!--   mat_files = mat_files[grepl("filtered_feature_bc_matrix",mat_files)] -->
+<!--   folders = dirname(mat_files) -->
+<!--   sample_ids = unlist(sapply(strsplit(folders,"/"), function(x) x[length(x)-2] ) ) -->
+<!--   names(folders) = sample_ids -->
+
+<!--   all_sample_data = list() -->
+<!--   for (n in sample_ids) { -->
+<!--     dir(path=folders[n]) -->
+<!--     tmp = Read10X( folders[n] ) -->
+<!--     all_sample_data[[n]] = CreateSeuratObject(tmp, project=n) -->
+<!--   } -->
+
+<!--   all_ge_data_raw = merge(all_sample_data[[1]], all_sample_data[2:length(all_sample_data)]) -->
+<!--   rm(all_sample_data) -->
+<!--   gc(verbose=F) -->
+
+<!--   rownames(ed) = ed$Barcode -->
+
+<!--   ed$sample_id_final = ed$Barcode -->
+
+<!--   meta = as.data.table(all_ge_data_raw@meta.data) -->
+<!--   meta[, orig_cell_id:= rownames(all_ge_data_raw@meta.data)] -->
+<!--   meta[, subfolder:=ed[orig.ident,"FILES"] ] -->
+<!--   meta[, sample_id_final:=orig.ident] -->
+
+<!--   meta[, group:=ed[sample_id_final, "Condition"]] -->
+<!--   meta[, fibrotic_stage:= ed[sample_id_final, "Fibrotic stage"]]  -->
+<!--   meta[, label:= ed[sample_id_final, "Fibrotic stage"]] -->
+<!--   meta[, sample_label:=ed[sample_id_final, "NAME"]] -->
+<!--   meta[, orig_sample_id:=ed[sample_id_final, "SAMPLE ID"]] -->
+
+<!--   for (cc in c("orig_cell_id", "sample_id_final", "group","label", "sample_label","fibrotic_stage")) { -->
+<!--     all_ge_data_raw = AddMetaData(all_ge_data_raw, meta[[cc]], col.name=cc) -->
+<!--   } -->
+
+<!--   save(all_ge_data_raw, ed,  file=stage1_file) -->
+<!-- } else { -->
+<!--   load(stage1_file) -->
+<!-- } -->
+
+
+<!-- ``` -->
+
+## Cells per sample (unfiltered)
+
+```{r}
+meta = all_ge_data_raw@meta.data
+table(meta$sampleID)
+```
+
+# Quality control
+
+## Detected genes
+
+```{r, fig.width = 8}
+ggplot(meta) + geom_boxplot(aes(x=orig.ident, y=nFeature_RNA, fill=sampleID)) + theme(axis.text.x = element_text(angle=45, hjust=1)) + ylab("Number of detected genes") + xlab("Sample") + scale_y_log10()
+```
+
+## UMIs
+
+```{r, fig.width = 8}
+ggplot(meta) + geom_boxplot(aes(x=orig.ident, y=nCount_RNA, fill=sampleID)) + theme(axis.text.x = element_text(angle=45, hjust=1)) + ylab("Total RNA counts") + xlab("Sample") + scale_y_log10()
+```
+
+
+## Overview
+
+```{r}
+all_ge_data_raw <- PercentageFeatureSet(all_ge_data_raw, "^MT-|^mt-", col.name = "percent_mito")
+all_ge_data_raw <- PercentageFeatureSet(all_ge_data_raw, "^RP[SL]|^Rp[sl]", col.name = "percent_ribo")
+```
+
+### General features
+
+```{r, fig.width=14, fig.height=10}
+feats <- c("nFeature_RNA","nCount_RNA","percent_mito","percent_ribo")
+VlnPlot(all_ge_data_raw, group.by= "sampleID", features = feats, pt.size = 0.01,ncol = 2) + NoLegend()
+```
+
+### Pairwise parameter correlations
+
+```{r, fig.width=14, fig.height=12}
+cowplot::plot_grid(ncol = 2, nrow = 2, 
+  FeatureScatter(all_ge_data_raw, "nCount_RNA"  , "nFeature_RNA", group.by = "sampleID", pt.size = .5) + guides(colour = guide_legend(override.aes = list(size=4))),
+  FeatureScatter(all_ge_data_raw, "percent_mito", "nFeature_RNA", group.by = "sampleID", pt.size = .5) + guides(colour = guide_legend(override.aes = list(size=4))),
+  FeatureScatter(all_ge_data_raw, "percent_ribo", "nFeature_RNA", group.by = "sampleID", pt.size = .5) + guides(colour = guide_legend(override.aes = list(size=4))),
+  FeatureScatter(all_ge_data_raw, "percent_ribo", "percent_mito", group.by = "sampleID", pt.size = .5) + guides(colour = guide_legend(override.aes = list(size=4)))
+)
+
+```
+
+### Pairwise feature distribution densities
+
+```{r, fig.width=14, fig.height=10}
+meta = as.data.table(all_ge_data_raw@meta.data)
+
+ggplot(meta) + geom_density2d_filled(aes(x=nCount_RNA, y=nFeature_RNA), contour_var = "ndensity" ) + facet_wrap(~sampleID) + ggtitle("nCount_RNA")
+ggplot(meta) + geom_density2d_filled(aes(x=percent_ribo, y=nFeature_RNA), contour_var = "ndensity" ) + facet_wrap(~sampleID) + ggtitle("percent ribo")
+ggplot(meta) + geom_density2d_filled(aes(x=percent_mito, y=nFeature_RNA), contour_var = "ndensity" ) + facet_wrap(~sampleID) + ggtitle("percent mitochondrial")
+```
+
+### Thresholds for numbers of detected genes and percentage of mitochondrial genes
+
+
+<!-- Set perc_mito threshold to Median + 1 MAD (more robust than Mean + 1SD as in publication).  -->
+
+<!-- ```{r} -->
+<!-- # Mean + 1SD as in publication -->
+<!-- mito_medians <- tapply(meta$percent_mito, meta$orig.ident, mean) -->
+<!-- mito_mads  <-  tapply(meta$percent_mito, meta$orig.ident, mad) -->
+<!-- barplot(mito_medians + mito_mads, las=2) -->
+<!-- #mito_thr_per_sample <- tapply(meta$percent_mito, meta$orig.ident, mean) + tapply(meta$percent_mito, meta$orig.ident, sd) -->
+<!-- mito_thr <- median(meta$percent_mito) + mad(meta$percent_mito) -->
+<!-- mito_thr -->
+<!-- ``` -->
+
+```{r}
+mito_thr <- 40
+```
+
+
+```{r}
+hist(meta$nFeature_RNA, 1000, main="Number of detected genes per cell"); abline(v=c(500,6500), col="red")
+hist(meta$nCount_RNA, 1000, main="Number of detected genes per cell"); abline(v=c(1000,60000), col="red")
+hist(meta$percent_mito, 1000, main="Percent mitochondrial RNA"); abline(v=mito_thr, col="red")
+```
+
+
+
+```{r}
+ggplot(meta, aes(x=nFeature_RNA)) + geom_density() + facet_wrap(~sampleID) + geom_vline(xintercept=c(500,6000)) + ggtitle("Number of detected features")
+ggplot(meta, aes(x=percent_mito)) + geom_density() + facet_wrap(~sampleID) + geom_vline(xintercept=c(mito_thr)) + ggtitle("Percent mitochondrial transcripts")
+```
+
+
+# Filtering 
+
+We exclude cells with less than 500 detected genes, those with > 6500 detected genes (possible doublets) and those with clear signs of cellular stress (percentage of mitochondrial RNA > mean(perc_mito)*1 SD(perc_mito)). We also filter out cells with low UMI counts (<1000) or high UMI counts (>60000), as indicated in the original publication.
+
+```{r}
+feature_low = 500
+feature_high = 6500
+max_mito = mito_thr
+umi_low = 1000
+umi_high = 60000
+
+all_ge_data_raw = AddMetaData(all_ge_data_raw, (all_ge_data_raw$nFeature_RNA > feature_low) & (all_ge_data_raw$nFeature_RNA < feature_high) & (all_ge_data_raw$percent_mito < max_mito) & (all_ge_data_raw$nCount_RNA > umi_low) & (all_ge_data_raw$nCount_RNA < umi_high), col.name="CellFilterKeep")
+
+ribo.genes <- grepl(pattern = "^RP[SL]|^Rp[sl]", x = rownames(x = all_ge_data_raw@assays$RNA))
+mito.genes <- grepl(pattern = "^MT-|^mt-", x = rownames(x = all_ge_data_raw@assays$RNA))
+
+selected_c <- WhichCells(all_ge_data_raw, expression = CellFilterKeep )
+selected_f <- rownames(all_ge_data_raw)[ Matrix::rowSums(all_ge_data_raw) >= 2 & !(ribo.genes | mito.genes)]
+```
+
+
+## Number of removed/kept cells per condition
+
+```{r}
+m = table(all_ge_data_raw$sampleID, ifelse(all_ge_data_raw$CellFilterKeep, "Keep","Remove") )
+m
+```
+
+```{r}
+barplot(t(m), col=c("blue","red"), main="Filtering results")
+legend("topright", legend=c("Kept","Removed"), fill = c("blue","red"))
+```
+
+
+```{r}
+all_ge_data_filtered <- subset(all_ge_data_raw, features=selected_f, cells=selected_c)
+
+dim(all_ge_data_filtered)
+```
+
+Raw and filtered data is saved to individual files *All_Filtered_scData.Rdata*.
+
+```{r}
+#save(all_ge_data_raw, ed,  file=file.path(data_storage_folder, "All_Raw_scData.Rdata"))
+save(all_ge_data_filtered, file=file.path(data_storage_folder, "All_Filtered_scData.Rdata"), compress=T)
+```
+
+
+# Software versions
+
+```{r}
+sessionInfo()
+```
+

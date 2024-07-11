@@ -1,0 +1,10 @@
+ClusterID	Type	Label	Markers
+0	Epithelial	SC/TA	MjV
+1	Epithelial	Enterocyte precursor	MjV
+2	Epithelial	Immature colonocyte	MjV
+3	Epithelial	TA	MjV; Mki67,Pcna
+4	Epithelial	Colonocyte Aqp8	MjV; Aqp8;Krt20
+5	Epithelial	Basal goblet	MjV; Muc2,Spink4
+6	Epithelial	Goblet Best2	MjV; Best2, Muc2; Spink4
+7	Epithelial	Enteroendocrine	MjV; Chga
+8	Epithelial	Tuft	Dclk1

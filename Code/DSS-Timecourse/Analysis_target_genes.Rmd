@@ -1,0 +1,114 @@
+---
+title: "GSVA colitis time course"
+author: "Hilmar Berger"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: false
+    number_sections: true
+    code_folding: hide
+    
+pdf_document:
+    fig_caption: true
+date: "`r format(Sys.time(), '%d %B, %Y %H:%M:%S')`"
+---
+
+```{r, message=FALSE}
+library(ggplot2)
+library(pheatmap)
+library(GSVA)
+library(SummarizedExperiment)
+library(DESeq2)
+library(data.table)
+library(msigdbr)
+library(readxl)
+library(ggplot2)
+library(ggpubr)
+```
+
+
+
+# GSE214600 - Peters et al., *A temporal classifier predicts histopathology state and parses acute-chronic phasing in inflammatory bowel disease patients*
+
+
+2.5% DSS, female C57BL/6
+
+```{r}
+load("./GSE214600.Rdata")
+sel_samples = colnames(expr)
+```
+
+
+```{r, fig.width=10, fig.height=12}
+sel_genes = c("Ifng","Bmp2","Mki67","Lgr5","Cdkn1a","Krt20","Anxa1")
+
+sel_mat <- expr[sel_genes, ]
+
+#pheatmap(sel_mat, scale="row", cluster_rows=F)
+
+d_ts <- reshape2::melt(sel_mat)
+colnames(d_ts) <- c("Gene","SampleID","Expression")
+
+d_ts <- merge(d_ts, ed, by.x="SampleID", by.y="SampleID", all.x=T)
+
+ggplot(d_ts, aes(x=group, y=Expression, col=treatment)) + geom_boxplot() + facet_grid(Gene ~ site, scale="free_y") + theme(axis.text.x = element_text(angle=45, hjust=1))
+```
+
+
+# GSE168053 - Liu et al. *Transitional Anal Cells Mediate Colonic Re-epithelialization in Colitis*
+
+C57Bl/6, 3% DSS
+
+```{r}
+load("./GSE168053.Rdata")
+
+expr_orig = expr
+expr = count_mat
+anno$gene_id <- ifelse(is.na(anno$ext_gene), anno$target_id , anno$ext_gene)
+expr = limma::avereps(expr, anno[rownames(expr),"gene_id"])
+expr = expr[!is.na(rownames(expr)) & rownames(expr) != "NA",]
+
+
+ed$label <- paste0(ed$group2, "_", ed$mouse_id)
+colnames(expr) <- ed[colnames(expr), "label"]
+rownames(ed) <- ed$label
+
+sel_samples = colnames(expr)
+
+ed$day = as.numeric(ed$day)
+
+```
+
+
+```{r, fig.width=8, fig.height=4}
+sel_genes = c("Cd44","Axin2","Mki67")
+
+sel_mat <- expr[sel_genes, ]
+
+d_ts <- reshape2::melt(sel_mat)
+colnames(d_ts) <- c("Gene","SampleID","Expression")
+
+d_ts <- merge(d_ts, ed, by.x="SampleID", by.y="label", all.x=T)
+d_ts$site2 <- ifelse(d_ts$site=="prox","mid-colon","rectal")
+
+d_ts <- subset(d_ts, site2 == "mid-colon")
+
+p <- ggplot(d_ts, aes(x=group, y=Expression + 1e-2, col=treatment)) + 
+  geom_boxplot() + 
+  facet_grid(~Gene) + 
+  theme(axis.text.x = element_text(angle=45, hjust=1)) + 
+  ggtitle("GSE168053 mouse colon 3% DSS")
+yrange <- layer_scales(p)$y$range$range
+ymax <- yrange[2] * 2
+ymin <- yrange[1]
+p <- p + coord_cartesian(ylim = c(ymin, ymax*1.1))
+p <- p + stat_compare_means(comparisons = list(c("DSS_9","Ctrl_0")), method="t.test")
+p <- p + scale_y_log10() + ylab("Expression [ TPM + 0.01 ]") + xlab("")
+p
+
+pdf(file.path("GSE168053_mid_colon_Cd44_Axin2_Mki67.pdf"), width=8, height = 4)
+print(p)
+dev.off()
+```
+

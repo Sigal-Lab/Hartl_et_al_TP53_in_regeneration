@@ -1,0 +1,233 @@
+---
+title: "GSE201723 scData - Preprocessing"
+author: "Hilmar Berger"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: false
+    number_sections: true
+    code_folding: hide
+    
+pdf_document:
+    fig_caption: true
+date: "`r format(Sys.time(), '%d %B, %Y %H:%M:%S')`"
+---
+
+```{r, message=FALSE}
+library(Seurat)
+library(ggplot2)
+
+library(readxl)
+library(knitr)
+library(data.table)
+library(cowplot)
+library(homologene)
+library(pheatmap)
+
+#library(future)
+#plan("multiprocess", workers = 2)
+
+data_storage_folder = file.path("./Results/data_storage","2024-03-21")
+if (!file.exists(data_storage_folder)) dir.create(data_storage_folder, recursive=T)
+
+```
+
+```{r}
+#load(file.path(data_storage_folder, "All_Filtered_scData.Rdata"))
+all_ge_data_filtered <- readRDS(file.path(data_storage_folder, "GSE201723.combined.rds"))
+DefaultAssay(all_ge_data_filtered) <- "RNA"
+all_ge_data_filtered <- DietSeurat(all_ge_data_filtered, assays = "RNA")
+all_ge_data_filtered <- JoinLayers(all_ge_data_filtered)
+sel_conditions <- c("d5_24h_aGFP","d5_24h_Uninj","d6_48h_aGFP","d6_48h_Uninj")
+all_ge_data_filtered <- subset(all_ge_data_filtered, seurat_clusters %in% c(2,3,4,6,7,8,16,22) & (is.na(cell_type) | cell_type=="epithelium") & condition %in% sel_conditions)
+
+table(all_ge_data_filtered$sampleID)
+```
+
+# Estimation and correction of cell cycle effect
+
+We use a list of known cell cycle genes (provided by the Seurat package) to estimate the contribution of cell cycle phase on the global gene expression.
+
+```{r}
+s.genes = cc.genes.updated.2019$s.genes |> human2mouse(db=homologeneData2) |> (\(x) x$mouseGene[!is.na(x$mouseGene)] |> unique())()
+g2m.genes = cc.genes.updated.2019$g2m.genes  |> human2mouse(db=homologeneData2) |> (\(x) x$mouseGene[!is.na(x$mouseGene)] |> unique())()
+```
+
+```{r}
+scData = all_ge_data_filtered
+scData <- NormalizeData(object = scData, normalization.method = "LogNormalize", scale.factor = 1e4)
+scData <- FindVariableFeatures(object = scData, selection.method = "vst")
+scData <- ScaleData(object = scData, features = rownames(scData))
+gc()
+```
+
+## Association of major variance components with cell cycle
+
+```{r}
+scData <- RunPCA(scData, features = VariableFeatures(scData), ndims.print = c(1:20), nfeatures.print = 20)
+#scData <- RunPCA(scData, features = VariableFeatures(scData), ndims.print = c(1:100), nfeatures.print = 20)
+
+# check top 100 positively loaded genes for PC_3 for cell cycle association in MSigDB
+#xx = scData@reductions$pca@feature.loadings
+#cat(paste(names(tail(sort(xx[, "PC_3"]), 100)), collapse="\n"))
+gc()
+```
+
+<!-- There are some cell cycle markers in PCs 1 and 7 (Top2a, Mki67) and G2M markers in PC 13. -->
+
+<!-- ```{r, fig.width=12} -->
+<!-- DimHeatmap(scData, dims = c(1, 7, 13)) -->
+<!-- ``` -->
+
+## Cell cycle scoring
+
+We use the Seura cell cycle scoring method to score association with S and G2/M phases and assign cells to G1, S or G2/M
+
+```{r}
+scData <- CellCycleScoring(scData, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+
+# view cell cycle scores and phase assignments
+#head(scData[[]])
+boxplot(scData$S.Score ~ scData$Phase)
+boxplot(scData$G2M.Score ~ scData$Phase)
+```
+
+For most of the cells the S and G2/M scores are rather low, even for those assigned to the corresponding class. 
+
+```{r, fig.height=6}
+RidgePlot(scData, features = c("Pcna", "Top2a", "Mcm6", "Mki67"), ncol = 4)
+```
+
+```{r, fig.width=13, fig.height=8}
+# PCA on cell cycle genes reveals
+scData <- RunPCA(scData, features = c(s.genes, g2m.genes))
+DimPlot(scData) + geom_hline(yintercept = 0, lty=2) + geom_vline(xintercept = 0, lty=2)
+DimPlot(scData,dims = c(2,3) )
+DimHeatmap(scData, dims = c(1, 2))
+```
+
+
+```{r}
+m = table(scData$Phase, scData$sampleID)
+kable(m)
+
+tmp = as.matrix.data.frame(m)
+colnames(tmp) = colnames(m)
+rownames(tmp) = rownames(m)
+mr = sweep(tmp, 2, apply(tmp,2,sum),"/")
+kable(round(mr,2))
+
+pheatmap(mr, scale="none", main="Relative contributions of cell cycle phases per experimental group", breaks=seq(0,1,by=0.01))
+```
+
+
+
+```{r}
+#scData <- ScaleData(scData, vars.to.regress = c("S.Score", "G2M.Score"), features = rownames(scData))
+
+# scData <- RunPCA(object = scData, pc.genes = scData@var.genes, do.print = F, pcs.compute = 100)
+# #pdf(sprintf("%s/output/elbowplot.pdf",scData.workdir))
+# ElbowPlot(object=scData,ndims=50)
+# #dev.off()
+# scData <- ProjectPCA(object = scData, do.print = F)
+# scData <- FindClusters(object = scData, reduction.type = "pca", dims.use = 1:75, resolution = 0.6, print.output = 0, save.SNN = , force.recalc = T)
+# scData <- StashIdent(object = scData, save.name = "CellType")
+# scData <- RunTSNE(object = scData, dims.use = 1:75, do.fast = T, perplexity = 60)
+# #
+# scData <- SetAllIdent(object = scData, id = "CellType")
+
+```
+
+# Final preprocessing
+
+Since there are several independent batches of samples with partially very different outcomes in terms of processing quality and cell viability we will use data set integration (Stuart and Butler et al., Cell 2019, doi: 10.1016/j.cell.2019.05.031) as implemented in Seurat v3.
+
+
+```{r}
+set.seed(20240311)
+
+old_meta = scData@meta.data
+scData = all_ge_data_filtered
+
+scData@meta.data$batch = scData@meta.data$sampleID
+scData@meta.data$Phase = old_meta$Phase
+scData@meta.data$S.Score = old_meta$S.Score
+scData@meta.data$G2M.Score = old_meta$G2M.Score
+
+sc.list <- SplitObject(scData, split.by = "batch")
+
+sc.list <- lapply(X = sc.list, FUN = function(x) {
+    x <- NormalizeData(x)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+```
+
+
+
+```{r}
+reference_dataset <- which(names(sc.list) %in% c("d5_24h_Uninj_1","d5_24h_Uninj_2", "d6_48h_Uninj_1","d6_48h_Uninj_2")) 
+sc.anchors = FindIntegrationAnchors(object.list = sc.list, dims = 1:20, reference = reference_dataset )
+gc()
+scData.combined <- IntegrateData(anchorset = sc.anchors, dims = 1:20)
+gc()
+```
+
+
+```{r}
+DefaultAssay(scData.combined) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+#scData.combined <- ScaleData(scData.combined, verbose = TRUE, vars.to.regress = c("sample_id_final", "G2M_score", "G1_score"))
+#scData.combined <- ScaleData(scData.combined, verbose = TRUE, vars.to.regress = c("percent_mito"))
+scData.combined <- ScaleData(scData.combined, verbose = TRUE)
+gc()
+scData.combined <- RunPCA(scData.combined, npcs = 30, verbose = TRUE)
+gc()
+# t-SNE and Clustering
+scData.combined <- RunUMAP(scData.combined, reduction = "pca", dims = 1:15)
+scData.combined <- FindNeighbors(scData.combined, reduction = "pca", dims = 1:15)
+scData.combined <- FindClusters(scData.combined, resolution = 0.3)
+```
+
+```{r}
+saveRDS(scData.combined, file=file.path(data_storage_folder, "GSE201723_epi_only.combined_no_SWAP.rds"), compress=T)
+#scData.combined <- readRDS(file.path(data_storage_folder, "GSE201723_epi_only.combined.rds"))
+```
+
+# Global clusters
+
+```{r, fig.width=14}
+#DimPlot(scData.combined, reduction = "umap", group.by = "batch")
+
+p1 <- DimPlot(scData.combined, reduction = "umap", group.by = "sampleID")
+p2 <- DimPlot(scData.combined, reduction = "umap", label = TRUE)
+plot_grid(p1, p2)
+
+DimPlot(scData.combined, reduction = "umap", split.by = "condition", label = T)
+DimPlot(scData.combined, reduction = "umap", group.by = "cell_type", label = T)
+DimPlot(scData.combined, reduction = "umap", group.by = "cell_label", label = T)
+```
+
+## Cluster assignments
+
+```{r}
+m = table(scData.combined$cell_label, scData.combined@meta.data$sampleID)
+kable(m)
+```
+
+
+```{r, fig.height=10, fig.width=8}
+mm = as.matrix.data.frame(m)
+colnames(mm) = colnames(m)
+rownames(mm) = rownames(m)
+mm_rel = sweep(mm, 2, apply(mm, 2,sum), "/")
+pheatmap(mm_rel, main="Relative single cell contribution of each cluster to condition totals")
+```
+
+# Software versions
+
+```{r}
+sessionInfo()
+```
+

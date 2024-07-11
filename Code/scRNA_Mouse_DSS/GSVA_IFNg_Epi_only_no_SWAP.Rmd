@@ -1,0 +1,429 @@
+---
+title: "Visualizations - GSE201723 DSS mouse colon"
+author: "Hilmar Berger"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: false
+    number_sections: true
+    code_folding: hide
+    
+pdf_document:
+    fig_caption: true
+date: "`r format(Sys.time(), '%d %B, %Y %H:%M:%S')`"
+---
+
+
+```{r, message=FALSE}
+rm(list=ls())
+library(Seurat)
+library(ggplot2)
+
+library(readxl)
+library(writexl)
+library(knitr)
+library(data.table)
+library(cowplot)
+library(magrittr)
+library(dplyr)
+
+library(pheatmap)
+
+library(grid)
+library(png)
+
+library(clusterProfiler)
+
+options(connectionObserver = NULL)
+library(org.Hs.eg.db)
+library(ReactomePA)
+library(msigdbr)
+
+result_folder = paste("./Results",format(Sys.time(), "%Y-%m-%d"),sep="/")
+if (!file.exists(result_folder)) dir.create(result_folder, recursive=T)
+
+data_storage_folder = file.path("./Results/data_storage","2024-03-21")
+if (!file.exists(data_storage_folder)) dir.create(data_storage_folder, recursive=T)
+
+library(future)
+options("future.globals.maxSize"=2**33)
+plan("multisession", workers = 8)
+
+source("~/Work/Projects/Datasets/Dotplot_scRNA_Seurat_v5.R")
+rerun_GSVA=T
+```
+
+
+```{r}
+scData.combined <- readRDS(file.path(data_storage_folder, "GSE201723_epi_only.combined_no_SWAP.rds"))
+tmp <- readRDS(file=file.path(data_storage_folder, "GSE201723_epi_only_no_SWAP_annotated_Metadata.RData"))
+scData.combined@meta.data <- tmp[Cells(scData.combined), ]
+
+DefaultAssay(scData.combined) <- "RNA"
+#scData.combined <- SetIdent(scData.combined, value="cluster_label")
+scData.combined <- JoinLayers(scData.combined)
+```
+
+
+# Cluster overview
+
+```{r, fig.width=10, fig.height=6}
+DimPlot(scData.combined, reduction = "umap", label = TRUE)
+```
+
+```{r}
+cond_order = c("d5_24h_Uninj","d6_48h_Uninj","d5_24h_aGFP","d6_48h_aGFP")
+```
+
+
+<!-- # Bmp2 -->
+
+<!-- ```{r, fig.width=12, fig.height=10} -->
+<!-- #DotPlot(scData.combined, features=c("Bmp2","Wnt5a","Procr","Sox6","Adamdec1","Postn","C3","Cd55","HGF","Il6","Il22","Il33","Nrg1"), cols="RdYlBu", split.by="condition") -->
+
+<!-- DotPlot(scData.combined, features=c("Hgf","Il6","Il22","Il33","Nrg1","Ifng"), cols="RdYlBu", split.by="condition") -->
+<!-- DotPlot(scData.combined, features=c("Bmp2","Hgf"), cols="RdYlBu", split.by="condition") -->
+<!-- scData.combined$condition2 = gsub("_", ".", scData.combined$condition) |> factor(levels = cond_order) -->
+<!-- ``` -->
+
+<!-- ```{r, fig.width=10, fig.height=5, eval=FALSE} -->
+<!-- dotplot_scRNA(scData.combined, feature = "Bmp2", cluster = "cluster_label", group="condition", scale=T) -->
+<!-- dotplot_scRNA(scData.combined, feature = "Id1", cluster = "cluster_label", group="condition", scale=T) -->
+<!-- dotplot_scRNA(scData.combined, feature = "Id2", cluster = "cluster_label", group="condition", scale=T) -->
+<!-- dotplot_scRNA(scData.combined, feature = "Ifng", cluster = "cluster_label", group="condition", scale=T) -->
+<!-- dotplot_scRNA(scData.combined, feature = "Irf1", cluster = "cluster_label", group="condition", scale=T) -->
+
+<!-- FeaturePlot(scData.combined, features = "Bmp2", split.by="condition", label=T) -->
+<!-- FeaturePlot(scData.combined, features = "Id1", split.by="condition", label=T) -->
+
+<!-- ``` -->
+
+
+<!-- ```{r, fig.width=14, fig.height=10, eval=FALSE} -->
+
+<!-- #final plots -->
+<!-- pdf(file=file.path(result_folder, "Secreted_factors.pdf"), width=8, height = 6) -->
+<!-- DotPlot(scData.combined, features=c("Hgf","Il6","Il22","Il33","Nrg1"), cols="RdYlBu", split.by="condition", dot.scale = 8) + theme(axis.text.x=element_text(size=18)) + xlab("") + ylab("") -->
+<!-- dev.off() -->
+
+<!-- ifn_induced = strsplit("Ifi27,Ifi30,Ifi35,Ifi44,Ifi44l,Ifih1,Ifit2,Ifit3,Ifitm2,Ifitm3,Ifnar2", ",") |> unlist() -->
+
+<!-- DotPlot(scData.combined, features=c("Id1","Id2","Bmp2","Ifngr1","Ifngr2","Cdkn1a","Lgr5","Axin2","Ascl2","Mki67","Krt20"), cols="RdYlBu", split.by="condition", dot.scale = 4) + theme(axis.text.x=element_text(size=14)) + xlab("") + ylab("") -->
+
+<!-- # pdf(file=file.path(result_folder, "Bmp2_Ifngr.pdf"), width=12, height = 6) -->
+<!-- # DotPlot(scData.combined, features=toupper(c("Id1","Id2","Bmp2","Ifngr1","Ifngr2","IRF1","IRF2","Cdkn1a","Lgr5","Axin2","Ascl2","Mki67","Krt20","Aqp8")), cols="RdYlBu", split.by="condition", dot.scale = 4) + theme(axis.text.x=element_text(size=12, angle=45, hjust=1)) + xlab("") + ylab("") -->
+<!-- # dev.off() -->
+<!-- ``` -->
+
+# GSVA IFNg response
+
+Additional gene sets from publications:
+
+  - Munoz et al Small Intestinal Stem Cell Signature (PMID: 22692129, DOI: 10.1038/emboj.2012.166, Supp Table S3 )
+  - DSS Sca+ vs. Non-DSS (Yui et al. Cell Stem Cell 2017, p.35; derived from published microarray data, https://doi.org/10.1016/j.stem.2017.11.001) 
+  - Herbst et al Beta-catenine target genes (human, PMID: 24467841)
+  - YAP-signature (Gregorieff et al. Nature 2015, p.715; supp table 1). We derived three signatures: The original, combined FC of FC(KO)/FC(Tg) and the individual signatures for KO and transgene (Tg)
+  - Fetal vs. adult intestinal cells (Yui et al. Cell Stem Cell 2017, p.107; derived from published microarray data, https://doi.org/10.1016/j.stem.2017.11.001)  
+  - Kleeman et al Wnt signatures  
+  - Beumer et al. Bmp2 signature  
+  
+
+```{r}
+custom_gene_sets_mouse = list()
+
+beta_cat_genes = as.data.frame(read_excel("~/Work/References/GeneSets/LGR5_StemCellSignature/Wnt target H2014 list.xls", sheet = 1, col_names = F))
+
+custom_gene_sets_mouse[["Herbst_et_al_Beta_catenin_targets"]] = homologene::human2mouse(beta_cat_genes$...1, db=homologene::homologeneData2)$mouseGene
+
+tmp = read.table("~/Work/References/GeneSets/LGR5_StemCellSignature/Munoz_et_al/Supp_Table_S3_GE_combined_SC_Signature.txt", sep="\t", header=T, stringsAsFactors = F)
+custom_gene_sets_mouse[["Lgr5_SC_Signature_Munoz"]] = unique(tmp$GeneSymbol)
+
+tmp = as.data.frame(read_excel("~/Work/References/GeneSets/Gregorieff_et_al/41586_2015_BFnature15382_MOESM27_ESM_Supp_Table_1.xlsx", sheet = 1))
+
+custom_gene_sets_mouse[["Gregorieff_Yap_comb.FC_up"]] = subset(tmp, Fold_log2 > 1 )$Gene_Symbol
+custom_gene_sets_mouse[["Gregorieff_Yap_comb.FC_down"]] = subset(tmp, Fold_log2 < -1 )$Gene_Symbol
+
+custom_gene_sets_mouse[["Gregorieff_Yap_KO_up"]] = subset(tmp, Yap_KO_log2FC > 1 )$Gene_Symbol
+custom_gene_sets_mouse[["Gregorieff_Yap_KO_down"]] = subset(tmp, Yap_KO_log2FC < -1 )$Gene_Symbol
+
+custom_gene_sets_mouse[["Gregorieff_Yap_Tg_up"]] = subset(tmp, Yap_TG_log2FC > 1 )$Gene_Symbol
+custom_gene_sets_mouse[["Gregorieff_Yap_Tg_down"]] = subset(tmp, Yap_TG_log2FC < -1 )$Gene_Symbol
+
+
+tmp = read.table("~/Work/References/GeneSets/Yui_et_al_CSC_2018/Fetal_Adult/DGE_Fetal_vs_Adult.txt", sep="\t", header=T, stringsAsFactors = F)
+
+custom_gene_sets_mouse[["Yui_Fetal_vs_adult_up"]] = subset(tmp, logFC > 1 & adj.P.Val < 0.05)$SYMBOL
+custom_gene_sets_mouse[["Yui_Fetal_vs_adult_down"]] = subset(tmp, logFC < -1 & adj.P.Val < 0.05)$SYMBOL
+
+tmp = read.table("~/Work/References/GeneSets/Yui_et_al_CSC_2018/Colitis_vs_control/DGE_Colitis_vs_control.txt", sep="\t", header=T, stringsAsFactors = F)
+
+custom_gene_sets_mouse[["Yui_DSS_colitis_vs_control_up"]] = subset(tmp, logFC > 1 & adj.P.Val < 0.05)$SYMBOL
+custom_gene_sets_mouse[["Yui_DSS_colitis_vs_control_down"]] = subset(tmp, logFC < -1 & adj.P.Val < 0.05)$SYMBOL
+
+```
+
+
+```{r}
+library(GSVA)
+library(msigdbr)
+ee = msigdbr(category = "H", species = "mouse")
+ee = rbind(ee, msigdbr(category = "C2",subcategory = "CGP",  species = "mouse"))
+ee = rbind(ee, msigdbr(category = "C3",subcategory = "TFT:GTRD",  species = "mouse"))
+ee = rbind(ee, msigdbr(category = "C3",subcategory = "TFT:TFT_Legacy",  species = "mouse"))
+ee = rbind(ee, msigdbr(category = "C6", species = "mouse"))
+
+d <- readxl::read_excel("~/Work/References/GeneSets/Beumer_Clevers_Bmp2_Colon-mmc2.xlsx", sheet = 1, na = "NA")
+d <- subset(d, !is.na(padj) & padj < 0.05)
+bmp2_up_genes <- subset(d, log2FoldChange > 1)$Column1 |> homologene::human2mouse(db=homologene::homologeneData2) |> (\(x) {x<-unique(x$mouseGene); x[!is.na(x)]} )()
+bmp2_dn_genes <- subset(d, log2FoldChange < -1)$Column1  |> homologene::human2mouse(db=homologene::homologeneData2) |> (\(x) {x<-unique(x$mouseGene); x[!is.na(x)]} )()
+ee_custom <- data.frame(gs_cat="CUSTOM", gs_subcat="Mm", gs_name="Beumer_Bmp2_ON", gene_symbol = bmp2_up_genes)
+ee_custom <- rbind(ee_custom, data.frame(gs_cat="CUSTOM", gs_subcat="Mm", gs_name="Beumer_Bmp2_OFF", gene_symbol = bmp2_dn_genes))
+
+krt20p_sig <- readRDS("~/Work/Projects/LichaoLiu/Analysis/Results/2024-05-24/IFNy_signature_in_Krt20pos_cells.rds")
+for (n in names(krt20p_sig)) {
+  ee_custom <- rbind(ee_custom, data.frame(gs_cat="CUSTOM", gs_subcat="Mm", gs_name=paste0("IFNy_sig_from_organoids_", n), gene_symbol = krt20p_sig[[n]]$GeneSymbol))
+}
+
+wnt_tmp <- readxl::read_excel("~/Work/References/GeneSets/Wnt_pathway/Kleeman_LI_LD/SuppTable5_reformatted.xlsx", sheet=1) |> as.data.frame()
+
+wnt_genes_mouse <- split(wnt_tmp$Gene, wnt_tmp$Geneset) |> lapply(function(x) {homologene::human2mouse(x, homologene::homologeneData2)$mouseGene })
+
+for (n in names(wnt_genes_mouse)) {
+  ee_custom <- rbind(ee_custom, data.frame(gs_cat="CUSTOM", gs_subcat="Mm", gs_name=paste0("KLEEMAN_",make.names(n)), gene_symbol = wnt_genes_mouse[[n]]))
+}
+
+for (n in names(custom_gene_sets_mouse)) {
+  ee_custom <- rbind(ee_custom, data.frame(gs_cat="CUSTOM", gs_subcat="Mm", gs_name=n, gene_symbol = custom_gene_sets_mouse[[n]]))
+}
+
+for (cc in colnames(ee)[!colnames(ee) %in% colnames(ee_custom)]) ee_custom[[cc]] <- NA
+
+ee <- rbind(ee, ee_custom)
+
+if(rerun_GSVA) {
+  r = GSVA::gsva(LayerData(scData.combined, layer = "data", assay = "RNA"), gset.idx.list = tapply(ee$gene_symbol, ee$gs_name, list), BPPARAM=BiocParallel::MulticoreParam(workers = 8))
+  saveRDS(r, file=file.path(data_storage_folder, "GSVA_H_C2_C3_C6_epi_only_no_SWAP.rds"))
+} else {
+  r = readRDS(file.path(data_storage_folder, "GSVA_H_C2_C3_C6_epi_only_no_SWAP.rds"))
+}
+
+for(rn in rownames(r)) {
+  scData.combined@meta.data[[paste0(rn, "_score")]] <- r[rn,]  
+}
+```
+
+
+
+```{r, fig.width=14, fig.height=8}
+scData.combined$IFNg_response_score = r["HALLMARK_INTERFERON_GAMMA_RESPONSE",]
+sel_clusters = c("SC/TA","TA","Enterocyte precursor","Immature colonocyte","Colonocyte Aqp8","Basal goblet","Goblet Best2")
+sd1 <- subset(scData.combined, condition %in% c("d5_24h_aGFP","d5_24h_Uninj","d6_48h_aGFP","d6_48h_Uninj") & cluster_label %in% sel_clusters)
+sd1$cluster_label <- factor(sd1$cluster_label, levels=sel_clusters)
+
+treatment_new = c("d5_24h_aGFP"="DSS d5","d5_24h_Uninj"="Ctrl d5","d6_48h_aGFP"="DSS d6","d6_48h_Uninj"="Ctrl d6")
+sd1@meta.data$treatment_group = treatment_new[sd1$condition]
+condition_order = c("Ctrl d5","DSS d5", "Ctrl d6", "DSS d6")
+
+FeaturePlot(sd1, "IFNg_response_score", split.by = "condition")
+VlnPlot(sd1, "IFNg_response_score", split.by = "condition") + geom_hline(yintercept = 0)
+
+par(mar=c(15,4,4,1))
+boxplot(sd1$IFNg_response_score ~ sd1$condition + sd1$cluster_label, outline=F, las=2, xlab="", ylab="IFNg response score")
+
+tmp <- as.data.table(sd1@meta.data)
+#agg = tapply(sd1$IFNg_response_score, list(sd1$sampleID, sd1$cluster_label), mean, na.rm=T)
+agg <- tmp[, .(mean_score=mean(IFNg_response_score)), by=c("sampleID","cluster_label","treatment_group")]
+tmp1 <- dcast(agg, cluster_label ~ sampleID + treatment_group)
+tmp_mat <- as.matrix(tmp1[, 2:ncol(tmp1)])
+rownames(tmp_mat) <- tmp1$cluster_label
+pheatmap::pheatmap(tmp_mat)
+
+#d1 = reshape2::melt(agg)
+#d1$condition = strsplit(as.character(d1$Var1), "_") |> sapply(function(x) paste(x[2:3], collapse = "_")) |> factor(levels=condition_order)
+d1 <- agg
+d1$condition = d1$treatment_group
+
+p = ggplot(d1, aes(x=cluster_label, y=mean_score)) + geom_point(position=position_dodge(width=0.75),aes(group=condition), size=2) + stat_summary(position=position_dodge2(width = .75), aes(col=condition), size=.5) + ylab("GSVA IFNg response score") + xlab("") + theme_classic() + theme(axis.text.x=element_text(size=18, angle=45, hjust=1), text = element_text(size=20)) 
+p
+# pdf(file=file.path(result_folder, "IFNg_response_score_n3_samples.pdf"), width=10, height = 6)
+# print(p)
+# dev.off()
+```
+
+
+<!-- Selected Hallmark scores -->
+
+```{r, fig.width=14, fig.height=8, eval=FALSE}
+sel_sets = c("HALLMARK_APICAL_JUNCTION","HALLMARK_APICAL_SURFACE","HALLMARK_APOPTOSIS","HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION","HALLMARK_E2F_TARGETS","HALLMARK_G2M_CHECKPOINT", "HALLMARK_IL2_STAT5_SIGNALING","HALLMARK_IL6_JAK_STAT3_SIGNALING","HALLMARK_INFLAMMATORY_RESPONSE","HALLMARK_INTERFERON_ALPHA_RESPONSE","HALLMARK_NOTCH_SIGNALING","HALLMARK_P53_PATHWAY","HALLMARK_TGF_BETA_SIGNALING","HALLMARK_TNFA_SIGNALING_VIA_NFKB","HALLMARK_WNT_BETA_CATENIN_SIGNALING", "CORDENONSI_YAP_CONSERVED_SIGNATURE","SMAD_Q6", "LEE_BMP2_TARGETS_DN", "LEE_BMP2_TARGETS_UP", "SUH_COEXPRESSED_WITH_ID1_AND_ID2_UP", "ID1_TARGET_GENES","ID2_TARGET_GENES", "Beumer_Bmp2_ON", "Beumer_Bmp2_OFF")
+for (rn in sel_sets) {
+  cn = paste0(rn, "_score")
+  #print(FeaturePlot(scData.combined, cn, split.by = "condition"))
+  #print(VlnPlot(sd1, cn, split.by = "condition") + geom_hline(yintercept = 0))
+
+  #boxplot(scData.combined$IFNa_response_score ~ scData.combined$condition + scData.combined$cluster_label, outline=F, las=2, xlab="", ylab="IFNg response score")
+
+  #agg = tapply(sd1@meta.data[[cn]], list(sd1$sampleID, sd1$cluster_label), mean, na.rm=T)
+  #pheatmap::pheatmap(agg)
+
+  #d1 = reshape2::melt(agg)
+  #d1$condition = strsplit(as.character(d1$Var1), "_") |> sapply(function(x) paste(x[2:3], collapse = "_")) |> factor(levels=condition_order)
+
+  tmp <- as.data.table(sd1@meta.data)
+  d1 <- tmp[, .(mean_score=mean(.SD[[cn]])), by=c("sampleID","cluster_label","treatment_group")]
+  d1$condition = d1$treatment_group
+  
+  p = ggplot(d1, aes(x=cluster_label, y=mean_score)) + geom_point(position=position_dodge(width=0.75),aes(group=condition), size=2) + stat_summary(position=position_dodge2(width = .75), aes(col=condition), size=.5) + ylab(cn) + xlab("") + theme_classic() + theme(axis.text.x=element_text(size=18, angle=45, hjust=1), text = element_text(size=20)) + geom_hline(yintercept=0, lty=2, linewidth=.2)
+  print(p)
+  
+}
+
+
+# pdf(file=file.path(result_folder, "IFNa_response_score_n3_samples.pdf"), width=10, height = 6)
+# print(p)
+# dev.off()
+```
+
+
+
+## Selected Hallmark scores, normalized to baseline
+
+Brown dashed lines: Baseline of untreated controls. Scores are normalized by subtracting the average level in untreated condition samples. 
+
+```{r, fig.width=14, fig.height=6, warning=FALSE}
+sel_sets = c("HALLMARK_INTERFERON_GAMMA_RESPONSE","HALLMARK_APICAL_JUNCTION","HALLMARK_APICAL_SURFACE","HALLMARK_APOPTOSIS","HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION","HALLMARK_E2F_TARGETS","HALLMARK_G2M_CHECKPOINT", "HALLMARK_IL2_STAT5_SIGNALING","HALLMARK_IL6_JAK_STAT3_SIGNALING","HALLMARK_INFLAMMATORY_RESPONSE","HALLMARK_INTERFERON_ALPHA_RESPONSE","HALLMARK_NOTCH_SIGNALING","HALLMARK_P53_PATHWAY","HALLMARK_TGF_BETA_SIGNALING","HALLMARK_TNFA_SIGNALING_VIA_NFKB","HALLMARK_WNT_BETA_CATENIN_SIGNALING", "CORDENONSI_YAP_CONSERVED_SIGNATURE","SMAD_Q6", "LEE_BMP2_TARGETS_DN", "LEE_BMP2_TARGETS_UP", "SUH_COEXPRESSED_WITH_ID1_AND_ID2_UP", "ID1_TARGET_GENES","ID2_TARGET_GENES", "FISCHER_DIRECT_P53_TARGETS_META_ANALYSIS", "FISCHER_DREAM_TARGETS", "FISCHER_G1_S_CELL_CYCLE", "FISCHER_G2_M_CELL_CYCLE" , unique(ee_custom$gs_name) )
+for (rn in sel_sets) {
+  cn = paste0(rn, "_score")
+
+  tmp <- as.data.table(sd1@meta.data)
+  d1 <- tmp[, .(mean_score=mean(.SD[[cn]])), by=c("sampleID","cluster_label","treatment_group")]
+  d1$condition <- d1$treatment_group
+  
+  d1[, ctrl_grp:=ifelse(treatment_group %in% c("Ctrl d5","Ctrl d6"), T, F)]
+  
+  d1[, baseline:=mean(ifelse(ctrl_grp, mean_score, NA), na.rm=T), 
+      by=c("cluster_label")]
+  
+  d1[, mean_score_norm:= mean_score - baseline]
+  
+  p = ggplot(d1, aes(x=cluster_label, y=mean_score_norm)) +
+    geom_point(position=position_dodge(width=0.75),aes(group=condition), size=2) +
+    stat_summary(position=position_dodge2(width = .75), aes(col=condition), size=.5, fun.data = function(x) mean_se(x,mult=2)) +
+    ylab("GSVA score normalized to Control") + xlab("") +
+    ggtitle(rn) + 
+    theme_bw() +
+    theme(axis.text.x=element_text(size=18, angle=45, hjust=1), text = element_text(size=14)) + 
+    geom_hline(yintercept=0, lty=2, linewidth = .3) + #facet_grid(DS~., scale="free_x") + 
+    geom_line(stat="identity", aes(y=baseline, x=cluster_label, group=1), lty=2, col="brown")
+  
+  print(p)
+
+  pdf(file=file.path(result_folder, paste0(cn, "_score_GSE201723.pdf")), width=14, height = 6)
+  print(p)
+  dev.off()
+}
+```
+
+<!-- # Signatures with stronges correlation to Id1/Id2 expression -->
+
+<!-- ```{r} -->
+<!-- tmp <- r[, Cells(sd1)] -->
+<!-- id_exp = LayerData(sd1, "counts", assay = "RNA", features=c("Id1","Id2")) -->
+
+<!-- # Correlation with Id1 -->
+<!-- cc <- cor(t(tmp), id_exp[1,], method = "spearman")  -->
+<!-- cc_s <- cc[order(cc[,1], decreasing = T),, drop=F] -->
+<!-- head(cc_s) -->
+<!-- cc_s[grepl("^SMAD|^SUH|^ID", rownames(cc_s)),,drop=F] -->
+
+<!-- # Correlation with Id2 -->
+<!-- cc <- cor(t(tmp), id_exp[2,], method = "spearman")  -->
+<!-- cc_s <- cc[order(cc[,1], decreasing = T),, drop=F] -->
+<!-- head(cc_s) -->
+<!-- cc_s[grepl("^SMAD|^SUH|^ID", rownames(cc_s)),,drop=F] -->
+
+<!-- ``` -->
+
+
+```{r}
+sc_iv <- sd1
+
+r_iv <- r[, Cells(sc_iv)]
+sid <- sc_iv@meta.data[colnames(r_iv),"orig.ident"]
+cl <- sc_iv@meta.data[colnames(r_iv),"cluster_label"]
+
+ed <- data.frame(sample=as.character(sid), g1 =sc_iv@meta.data[colnames(r_iv),"treatment_group"] |> as.character()) |> unique()
+ed$g2 <- ifelse(ed$g1 %in% c("Ctrl d5","Ctrl d6"), "Ctrl", "DSS")
+rownames(ed) <- ed$sample
+
+all_res <- list()
+
+for (cc in unique(cl)) {
+  r_agg <- limma::avearrays(r_iv[,cl == cc], sid[cl==cc])
+
+  library(limma)
+  design <- cbind(intercept=rep(1,ncol(r_agg)), group=ifelse(ed[colnames(r_agg),"g2"]=="DSS", 1, 0) )
+  
+  fit <- lmFit(r_agg, design = design)
+  fit <- eBayes(fit)
+  
+  res <- topTable(fit, coef="group", number = nrow(r_agg))
+  res$gs_name <- rownames(res)
+  res$cluster <- cc
+  
+  all_res[[cc]] <- res[order(res$P.Value),]
+}
+
+
+all_res_df <- do.call(rbind, all_res)
+all_res_df$FDR.global  <- p.adjust(all_res_df$P.Value, method = "BH")
+```
+
+
+```{r}
+subset(all_res_df, grepl("^HALLMARK_INTERFERON_GAMMA",gs_name)) |> (\(x) x[order(x$P.Value),])()
+subset(all_res_df, grepl("^HALLMARK_E2F_",gs_name)) |> (\(x) x[order(x$P.Value),])()
+subset(all_res_df, grepl("^SUH_",gs_name)) |> (\(x) x[order(x$P.Value),])()
+```
+
+
+# Signatures with stronges correlation to Id1/Id2 expression
+
+```{r}
+tmp <- r[, Cells(sd1)]
+id_exp = LayerData(sd1, "counts", assay = "RNA", features=c("Id1","Id2"))
+
+# Correlation with Id1
+cc <- cor(t(tmp), id_exp[1,], method = "spearman") 
+cc_s <- cc[order(cc[,1], decreasing = T),, drop=F]
+head(cc_s)
+cc_s[grepl("^SMAD|^SUH|^ID", rownames(cc_s)),,drop=F]
+
+# Correlation with Id2
+cc <- cor(t(tmp), id_exp[2,], method = "spearman") 
+cc_s <- cc[order(cc[,1], decreasing = T),, drop=F]
+head(cc_s)
+cc_s[grepl("^SMAD|^SUH|^ID", rownames(cc_s)),,drop=F]
+
+```
+
+
+# Software versions
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

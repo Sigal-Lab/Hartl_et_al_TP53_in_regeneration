@@ -1,0 +1,142 @@
+---
+title: "DSS time course data sets - Import from GEO"
+author: "Hilmar Berger"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: false
+    number_sections: true
+    code_folding: hide
+    
+pdf_document:
+    fig_caption: true
+date: "`r format(Sys.time(), '%d %B, %Y %H:%M:%S')`"
+---
+
+```{r, message=FALSE}
+library(ggplot2)
+library(pheatmap)
+library(GSVA)
+library(SummarizedExperiment)
+library(DESeq2)
+library(data.table)
+```
+
+
+
+# GSE214600 - Peters et al., *A temporal classifier predicts histopathology state and parses acute-chronic phasing in inflammatory bowel disease patients*
+
+
+```{r}
+tmp = fread("../../Data/ExtDataSets/Raw/GSE214600/GSE214600_Peters_et_al_raw_counts_matrix.csv.gz")
+
+gset = GEOquery::getGEO("GSE214600")[[1]]
+ed = pData(gset)
+
+
+count_mat = as.matrix(tmp[, 2:ncol(tmp)])
+rownames(count_mat) <- tmp$V1
+mode(count_mat) <- "integer"
+
+ed$SampleID <- ed$title |> strsplit(" ") |> sapply(function(x) x[length(x)]) |> (\(x) gsub("\\]|\\[","",x) )()
+rownames(ed) <- ed$SampleID
+ed$day = gsub("day: ", "", ed$characteristics_ch1.6) |> as.numeric()
+ed$treatment = ifelse(ed$characteristics_ch1.5 == "ctrl disease: C", "ctrl", "DSS")
+ed$site = ed$`bio region:ch1`
+ed_orig <- ed
+ed$tp <- gsub("hit rest: ", "", ed$characteristics_ch1.7)
+sel_samples <- ed[ed$source_name_ch1 == "Colon" & ed$characteristics_ch1.2 == "model: DSS",]
+sel_samples$group <- paste0(sel_samples$treatment, "_", ifelse(sel_samples$day %in% c(35,36), 35.5, sel_samples$day)) |> factor(c("ctrl_5","ctrl_12", "ctrl_17", "ctrl_35.5", "DSS_5","DSS_12","DSS_17", "DSS_35.5"))
+sel_samples$group2 <- paste0(sel_samples$treatment, "_", ifelse(sel_samples$day %in% c(35,36), 35.5, sel_samples$day), "_", sel_samples$site)
+
+sel_samples$sample_label = paste0(sel_samples$group2, "_", sel_samples$SampleID)
+
+ed <- sel_samples
+count_mat <- count_mat[, sel_samples$SampleID]
+
+expr = DESeq2::vst(count_mat)
+
+save(expr, ed, count_mat, file="GSE214600.Rdata")
+
+table(ed$group, ed$site)
+```
+
+
+
+## Multi Dimensional Scaling on all genes
+
+```{r, fig.width=8, fig.height=8}
+cp = palette(rainbow(8))
+zero_rows = apply(expr==0,1, sum)==ncol(expr)
+data_inp = scale(t(expr[!zero_rows,]))
+
+d <- dist(data_inp) # euclidean distances between the rows
+fit <- cmdscale(d,eig=TRUE, k=2) # k is the number of dim
+
+# plot solution
+x <- fit$points[,1]
+y <- fit$points[,2]
+gg = ed[as.character(rownames(fit$points)), "group"] |> factor()
+plot(x, y, xlab="Coordinate 1", ylab="Coordinate 2", main="Metric MDS, all genes", type="n", xlim=c(min(x)*1.5, max(x)*1.5), ylim=c(min(y)*1.5, max(y)*1.5))
+text(x,y,labels=ed[rownames(data_inp), "group2"], col=cp[as.numeric(gg)])
+legend("topright", legend=levels(gg), fill=cp[1:length(levels(gg))])
+```
+
+
+# GSE168053 Liu et al. *Transitional Anal Cells Mediate Colonic Re-epithelialization in Colitis*
+
+
+```{r}
+  tmp = fread("../../Data/ExtDataSets/Raw/GSE168053/GSE168053_abundances.csv.gz")
+  tmp <- tmp[!duplicated(tmp$target_id)]
+  
+  count_mat = as.matrix(tmp[, 7:ncol(tmp)])
+  rownames(count_mat) <- tmp$target_id
+  #mode(count_mat) <- "integer"
+  
+  anno = tmp[, 1:6] |> as.data.frame()
+  rownames(anno) <- anno$target_id
+  
+  gset = GEOquery::getGEO("GSE168053")[[1]]
+  ed = pData(gset)
+
+  ed$site = gsub("anatomical.location: ","", ed$characteristics_ch1.2)
+  ed$mouse_id = gsub("mouse.id: ","", ed$characteristics_ch1.3)
+  ed$treatment = ifelse(ed$`injury:ch1`=="DSS","DSS","Ctrl")
+  ed$day = ed$`dissection.day:ch1`
+  ed$group <- paste0(ed$treatment, "_", ed$day) |> factor(levels =  c("Ctrl_0", "DSS_3","DSS_6","DSS_9", "DSS_14", "DSS_20"))
+  ed$group2 <- paste0(ed$treatment, "_", ed$day, "_", ed$site)
+  rownames(ed) <- ed$title
+    
+  ed <- subset(ed, site %in% c("dist","prox"))
+  count_mat <- count_mat[, ed$title]
+  count_mat[is.na(count_mat)] <- 0
+  
+  #expr = DESeq2::vst(count_mat)
+  expr = log2(count_mat+1e-3)
+  
+  save(expr, ed, anno, count_mat, file="GSE168053.Rdata")
+  
+  
+  table(ed$group, ed$site)
+```
+
+## Multi Dimensional Scaling on all genes
+
+```{r, fig.width=8, fig.height=8}
+cp = palette(rainbow(8))
+zero_rows = apply(expr==0,1, sum)==ncol(expr)
+data_inp = scale(t(expr[!zero_rows,]))
+
+d <- dist(data_inp) # euclidean distances between the rows
+fit <- cmdscale(d,eig=TRUE, k=2) # k is the number of dim
+
+# plot solution
+x <- fit$points[,1]
+y <- fit$points[,2]
+gg = ed[as.character(rownames(fit$points)), "group2"] |> factor()
+plot(x, y, xlab="Coordinate 1", ylab="Coordinate 2", main="Metric MDS, all genes", type="n", xlim=c(min(x)*1.5, max(x)*1.5), ylim=c(min(y)*1.5, max(y)*1.5))
+text(x,y,labels=rownames(data_inp), col=cp[as.numeric(gg)])
+legend("topleft", legend=levels(gg), fill=cp[1:length(levels(gg))])
+```

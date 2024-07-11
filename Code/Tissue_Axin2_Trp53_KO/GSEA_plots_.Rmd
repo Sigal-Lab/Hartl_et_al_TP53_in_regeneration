@@ -75,7 +75,23 @@ rownames(mouse_to_human) = mouse_to_human$GeneSymbol
 # Plots for selected gene sets
 
 ```{r}
-selected_genesets = c("Lgr5_SC_Signature_Munoz", "Yui_DSS_colitis_vs_control_down", "Yui_DSS_colitis_vs_control_up", "Gregorieff_Yap_KO_up", "Gregorieff_Yap_KO_down", "Gregorieff_Yap_Tg_up", "Gregorieff_Yap_Tg_down")
+selected_genesets = c("Lgr5_SC_Signature_Munoz", "Herbst_et_al_Beta_catenin_targets", "Yui_DSS_colitis_vs_control_down", "Yui_DSS_colitis_vs_control_up", "Gregorieff_Yap_KO_up", "Gregorieff_Yap_KO_down", "Gregorieff_Yap_Tg_up", "Gregorieff_Yap_Tg_down")
+
+selected_genesets = append(selected_genesets, strsplit("WNT_SIGNALING
+WILLERT_WNT_SIGNALING
+WP_WNT_SIGNALING
+WP_WNT_SIGNALING_PATHWAY
+REACTOME_SIGNALING_BY_WNT
+PID_WNT_SIGNALING_PATHWAY
+PID_WNT_CANONICAL_PATHWAY
+GOBP_CANONICAL_WNT_SIGNALING_PATHWAY
+BIOCARTA_WNT_PATHWAY
+HALLMARK_WNT_BETA_CATENIN_SIGNALING
+KLEEMAN_Global.Wnt.targets
+KLEEMAN_Intestinal.stem.cell.Wnt.targets
+KLEEMAN_Proliferative.cell.Wnt.target.genes
+KLEEMAN_Wnt.negative.regulator.genes
+Boulter_Wnt_genes","\n") |> unlist())
 ```
 
 ```{r, fig.width=16, fig.height=6, results="hide"}
@@ -102,6 +118,7 @@ for (sel_comparison in names(all_results)) {
       ranks = ranks_human
     } else {
       loc = unlist(lapply(gset_collections_mouse, function(x) grep(paste0("^",g,"$"), names(x) )))
+      if(length(loc) == 0) {warning(paste0("Did not find results for gene set ",g,". Skipping.")); next;}
       sel_genes = unlist(gset_collections_mouse[[names(loc)]][loc])
       ranks = ranks_mouse
 
@@ -147,6 +164,7 @@ for (sel_comparison in names(all_results)) {
         ranks = ranks_human
       } else {
         loc = unlist(lapply(gset_collections_mouse, function(x) grep(paste0("^",g,"$"), names(x) )))
+        if(length(loc) == 0) {warning(paste0("Did not find results for gene set ",g,". Skipping.")); next;}
         sel_genes = unlist(gset_collections_mouse[[names(loc)]][loc])
         ranks = ranks_mouse
   
